@@ -1,12 +1,13 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
+import '../services/auth_api.dart';
 
 // ─── Public entry-point ───────────────────────────────────────────────────────
 
 class AuthScreen extends StatefulWidget {
   /// Called when the user successfully logs in / registers, or presses "Skip".
-  final VoidCallback onAuthSuccess;
+  final ValueChanged<AuthSession?> onAuthSuccess;
 
   const AuthScreen({super.key, required this.onAuthSuccess});
 
@@ -107,13 +108,14 @@ class _AuthScreenState extends State<AuthScreen>
                             showLogin: _showLogin,
                             onToggle: () =>
                                 setState(() => _showLogin = !_showLogin),
-                            onSuccess: widget.onAuthSuccess,
+                            onSuccess: (session) =>
+                                widget.onAuthSuccess(session),
                           ),
 
                           const SizedBox(height: 24),
 
                           // ── Skip button ───────────────────────────────
-                          _SkipButton(onSkip: widget.onAuthSuccess),
+                          _SkipButton(onSkip: () => widget.onAuthSuccess(null)),
 
                           const SizedBox(height: 32),
                         ],
@@ -143,6 +145,7 @@ class _FloatingOrbsState extends State<_FloatingOrbs>
     with TickerProviderStateMixin {
   late final List<AnimationController> _ctrls;
   late final List<Animation<double>> _anims;
+  final List<Timer> _startTimers = [];
 
   static const _orbs = [
     _OrbConfig(top: -60, left: -40, size: 200, delay: 0.0, alpha: 0.10),
@@ -160,10 +163,11 @@ class _FloatingOrbsState extends State<_FloatingOrbs>
         vsync: this,
         duration: Duration(seconds: 4 + (i * 2) % 4),
       );
-      Future.delayed(Duration(milliseconds: (500 * _orbs[i].delay).round()),
-          () {
+      final timer =
+          Timer(Duration(milliseconds: (500 * _orbs[i].delay).round()), () {
         if (mounted) c.repeat(reverse: true);
       });
+      _startTimers.add(timer);
       return c;
     });
     _anims = _ctrls
@@ -173,6 +177,9 @@ class _FloatingOrbsState extends State<_FloatingOrbs>
 
   @override
   void dispose() {
+    for (final timer in _startTimers) {
+      timer.cancel();
+    }
     for (final c in _ctrls) {
       c.dispose();
     }
@@ -250,7 +257,7 @@ class _Logo extends StatelessWidget {
               ),
             ],
           ),
-          child: Center(
+          child: const Center(
             child: Icon(
               Icons.sports_tennis,
               size: 40,
@@ -288,7 +295,7 @@ class _Logo extends StatelessWidget {
 class _AuthCard extends StatelessWidget {
   final bool showLogin;
   final VoidCallback onToggle;
-  final VoidCallback onSuccess;
+  final ValueChanged<AuthSession> onSuccess;
 
   const _AuthCard({
     required this.showLogin,
@@ -360,8 +367,28 @@ class _CardContainer extends StatelessWidget {
 
 // ─── Login Panel ──────────────────────────────────────────────────────────────
 
+void _showAuthSnackBar(BuildContext context, String message,
+    {bool error = true}) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor:
+            error ? const Color(0xFFDC2626) : const Color(0xFF059669),
+      ),
+    );
+}
+
+String _authErrorMessage(Object error, String fallback) {
+  if (error is ApiException) {
+    return error.message;
+  }
+  return fallback;
+}
+
 class _LoginPanel extends StatefulWidget {
-  final VoidCallback onSuccess;
+  final ValueChanged<AuthSession> onSuccess;
   final VoidCallback onSwitchToRegister;
 
   const _LoginPanel({
@@ -389,12 +416,26 @@ class _LoginPanelState extends State<_LoginPanel> {
   }
 
   void _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
     setState(() => _loading = true);
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (mounted) {
-      setState(() => _loading = false);
-      widget.onSuccess();
+    try {
+      final session = await AuthApi().login(
+        email: _emailCtrl.text.trim(),
+        password: _pwCtrl.text,
+      );
+      if (mounted) widget.onSuccess(session);
+    } catch (error) {
+      if (mounted) {
+        _showAuthSnackBar(
+          context,
+          _authErrorMessage(
+              error, 'Could not sign in. Check that the backend is running.'),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -426,7 +467,12 @@ class _LoginPanelState extends State<_LoginPanel> {
             const SizedBox(height: 24),
 
             // Google sign-in
-            _GoogleButton(onTap: widget.onSuccess),
+            _GoogleButton(
+              onTap: () => _showAuthSnackBar(
+                context,
+                'Google sign-in is not connected to the backend yet.',
+              ),
+            ),
             const SizedBox(height: 18),
 
             // Divider
@@ -441,8 +487,12 @@ class _LoginPanelState extends State<_LoginPanel> {
               icon: Icons.email_outlined,
               keyboardType: TextInputType.emailAddress,
               validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Email is required';
-                if (!v.contains('@')) return 'Enter a valid email';
+                if (v == null || v.trim().isEmpty) {
+                  return 'Email is required';
+                }
+                if (!v.contains('@')) {
+                  return 'Enter a valid email';
+                }
                 return null;
               },
             ),
@@ -457,15 +507,21 @@ class _LoginPanelState extends State<_LoginPanel> {
               obscureText: _obscure,
               suffixIcon: IconButton(
                 icon: Icon(
-                  _obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  _obscure
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
                   color: Colors.white70,
                   size: 20,
                 ),
                 onPressed: () => setState(() => _obscure = !_obscure),
               ),
               validator: (v) {
-                if (v == null || v.isEmpty) return 'Password is required';
-                if (v.length < 6) return 'At least 6 characters';
+                if (v == null || v.isEmpty) {
+                  return 'Password is required';
+                }
+                if (v.length < 6) {
+                  return 'At least 6 characters';
+                }
                 return null;
               },
             ),
@@ -535,7 +591,7 @@ class _LoginPanelState extends State<_LoginPanel> {
 // ─── Register Panel ───────────────────────────────────────────────────────────
 
 class _RegisterPanel extends StatefulWidget {
-  final VoidCallback onSuccess;
+  final ValueChanged<AuthSession> onSuccess;
   final VoidCallback onSwitchToLogin;
 
   const _RegisterPanel({
@@ -552,6 +608,7 @@ class _RegisterPanelState extends State<_RegisterPanel> {
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
+  final _cityCtrl = TextEditingController(text: 'Ho Chi Minh');
   final _pwCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
   bool _obscurePw = true;
@@ -562,18 +619,36 @@ class _RegisterPanelState extends State<_RegisterPanel> {
   void dispose() {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
+    _cityCtrl.dispose();
     _pwCtrl.dispose();
     _confirmCtrl.dispose();
     super.dispose();
   }
 
   void _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
     setState(() => _loading = true);
-    await Future.delayed(const Duration(milliseconds: 900));
-    if (mounted) {
-      setState(() => _loading = false);
-      widget.onSuccess();
+    try {
+      final session = await AuthApi().register(
+        username: _nameCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+        password: _pwCtrl.text,
+        city: _cityCtrl.text.trim().isEmpty ? null : _cityCtrl.text.trim(),
+        profileImageUrl: null,
+      );
+      if (mounted) widget.onSuccess(session);
+    } catch (error) {
+      if (mounted) {
+        _showAuthSnackBar(
+          context,
+          _authErrorMessage(error,
+              'Could not create account. Check that the backend is running.'),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -605,20 +680,28 @@ class _RegisterPanelState extends State<_RegisterPanel> {
             const SizedBox(height: 24),
 
             // Google sign-up
-            _GoogleButton(label: 'Sign up with Google', onTap: widget.onSuccess),
+            _GoogleButton(
+              label: 'Sign up with Google',
+              onTap: () => _showAuthSnackBar(
+                context,
+                'Google sign-up is not connected to the backend yet.',
+              ),
+            ),
             const SizedBox(height: 18),
 
             _OrDivider(),
             const SizedBox(height: 18),
 
-            // Full name
+            // Username
             _GlassField(
               controller: _nameCtrl,
-              label: 'Full name',
-              hint: 'John Doe',
+              label: 'Username',
+              hint: 'nam',
               icon: Icons.person_outline,
               validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Name is required';
+                if (v == null || v.trim().isEmpty) {
+                  return 'Username is required';
+                }
                 return null;
               },
             ),
@@ -632,10 +715,23 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               icon: Icons.email_outlined,
               keyboardType: TextInputType.emailAddress,
               validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Email is required';
-                if (!v.contains('@')) return 'Enter a valid email';
+                if (v == null || v.trim().isEmpty) {
+                  return 'Email is required';
+                }
+                if (!v.contains('@')) {
+                  return 'Enter a valid email';
+                }
                 return null;
               },
+            ),
+            const SizedBox(height: 12),
+
+            // City
+            _GlassField(
+              controller: _cityCtrl,
+              label: 'City',
+              hint: 'Ho Chi Minh',
+              icon: Icons.location_on_outlined,
             ),
             const SizedBox(height: 12),
 
@@ -648,15 +744,21 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               obscureText: _obscurePw,
               suffixIcon: IconButton(
                 icon: Icon(
-                  _obscurePw ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  _obscurePw
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
                   color: Colors.white70,
                   size: 20,
                 ),
                 onPressed: () => setState(() => _obscurePw = !_obscurePw),
               ),
               validator: (v) {
-                if (v == null || v.isEmpty) return 'Password is required';
-                if (v.length < 6) return 'At least 6 characters';
+                if (v == null || v.isEmpty) {
+                  return 'Password is required';
+                }
+                if (v.length < 6) {
+                  return 'At least 6 characters';
+                }
                 return null;
               },
             ),
@@ -671,7 +773,9 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               obscureText: _obscureConfirm,
               suffixIcon: IconButton(
                 icon: Icon(
-                  _obscureConfirm ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  _obscureConfirm
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
                   color: Colors.white70,
                   size: 20,
                 ),
@@ -679,8 +783,12 @@ class _RegisterPanelState extends State<_RegisterPanel> {
                     setState(() => _obscureConfirm = !_obscureConfirm),
               ),
               validator: (v) {
-                if (v == null || v.isEmpty) return 'Please confirm password';
-                if (v != _pwCtrl.text) return 'Passwords do not match';
+                if (v == null || v.isEmpty) {
+                  return 'Please confirm password';
+                }
+                if (v != _pwCtrl.text) {
+                  return 'Passwords do not match';
+                }
                 return null;
               },
             ),
@@ -804,7 +912,8 @@ class _GlassField extends StatelessWidget {
             ),
             focusedErrorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
+              borderSide:
+                  const BorderSide(color: Color(0xFFFCA5A5), width: 1.5),
             ),
             errorStyle: const TextStyle(color: Color(0xFFFCA5A5), fontSize: 11),
           ),
@@ -913,7 +1022,7 @@ class _GoogleButton extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // Google "G" logo painted manually
-                _GoogleLogo(size: 20),
+                const _GoogleLogo(size: 20),
                 const SizedBox(width: 10),
                 Text(
                   label,
@@ -980,8 +1089,8 @@ class _GoogleLogoPainter extends CustomPainter {
     // "G" bar — white fill then blue bar
     paint.color = const Color(0xFF4285F4);
     canvas.drawRect(
-      Rect.fromLTRB(center.dx, center.dy - radius * 0.15,
-          center.dx + radius, center.dy + radius * 0.15),
+      Rect.fromLTRB(center.dx, center.dy - radius * 0.15, center.dx + radius,
+          center.dy + radius * 0.15),
       paint,
     );
 
@@ -991,9 +1100,6 @@ class _GoogleLogoPainter extends CustomPainter {
 
     // Repaint the blue right-side arc text area
     paint.color = const Color(0xFF4285F4);
-    final gPath = Path()
-      ..addOval(Rect.fromCircle(center: center, radius: radius * 0.78))
-      ..addOval(Rect.fromCircle(center: center, radius: radius * 0.55));
     // Simpler: just draw the colored ring segments again smaller
     for (int i = 0; i < 4; i++) {
       paint.color = colors[i];
