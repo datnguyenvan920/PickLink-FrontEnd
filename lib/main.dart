@@ -72,28 +72,60 @@ class _RootScaffold extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: outerBg,
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 448),
-          child: ColoredBox(
-            color: bg,
-            child: Stack(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final isDesktop = constraints.maxWidth >= 800;
+
+          if (isDesktop) {
+            // ── Desktop layout ──────────────────────────────────────────
+            return Row(
               children: [
-                // Active screen (full height, padded at bottom for nav bar)
-                Positioned.fill(child: _buildScreen()),
-                // Parabolic bottom nav
-                Positioned(
-                  bottom: 0, left: 0, right: 0,
-                  child: _ParabolicNavBar(
-                    activeTab: activeTab,
-                    isDarkMode: isDarkMode,
-                    onTabChanged: onTabChanged,
+                _DesktopSideNav(
+                  activeTab: activeTab,
+                  isDarkMode: isDarkMode,
+                  onTabChanged: onTabChanged,
+                  onDarkModeChanged: onDarkModeChanged,
+                ),
+                // Thin divider line
+                VerticalDivider(
+                  width: 1,
+                  thickness: 1,
+                  color: isDarkMode ? const Color(0xFF374151) : const Color(0xFFE5E7EB),
+                ),
+                // Main content — expands to fill remaining space
+                Expanded(
+                  child: ColoredBox(
+                    color: bg,
+                    child: _buildScreen(),
                   ),
                 ),
               ],
+            );
+          }
+
+          // ── Mobile layout (unchanged) ────────────────────────────────
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 448),
+              child: ColoredBox(
+                color: bg,
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: _buildScreen()),
+                    Positioned(
+                      bottom: 0, left: 0, right: 0,
+                      child: _ParabolicNavBar(
+                        activeTab: activeTab,
+                        isDarkMode: isDarkMode,
+                        onTabChanged: onTabChanged,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -106,6 +138,207 @@ class _NavItem {
   final String label;
   final int index;
   const _NavItem(this.icon, this.label, this.index);
+}
+
+// ─── Desktop Side Nav ─────────────────────────────────────────────────────────
+
+class _DesktopSideNav extends StatelessWidget {
+  final int activeTab;
+  final bool isDarkMode;
+  final ValueChanged<int> onTabChanged;
+  final ValueChanged<bool> onDarkModeChanged;
+
+  static const _items = [
+    _NavItem(Icons.emoji_events_outlined, 'Rank',    0),
+    _NavItem(Icons.people_outline,        'Social',  1),
+    _NavItem(Icons.sports_tennis,         'Play',    2),
+    _NavItem(Icons.map_outlined,          'Map',     3),
+    _NavItem(Icons.person_outline,        'Profile', 4),
+  ];
+
+  const _DesktopSideNav({
+    required this.activeTab,
+    required this.isDarkMode,
+    required this.onTabChanged,
+    required this.onDarkModeChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg     = isDarkMode ? const Color(0xFF111827) : Colors.white;
+    final active = const Color(0xFF22C55E);
+
+    return SizedBox(
+      width: 220,
+      child: ColoredBox(
+        color: bg,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Logo / brand ───────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+              child: Row(children: [
+                Container(
+                  width: 38, height: 38,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(colors: [Color(0xFF4ADE80), Color(0xFF059669)]),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(
+                    child: Text('PB', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'PickleMatch',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: isDarkMode ? const Color(0xFF4ADE80) : const Color(0xFF16A34A),
+                  ),
+                ),
+              ]),
+            ),
+
+            // ── Section label ──────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                'NAVIGATION',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.4,
+                  color: isDarkMode ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF),
+                ),
+              ),
+            ),
+
+            // ── Nav items ──────────────────────────────────────────────
+            ...List.generate(_items.length, (i) {
+              final item     = _items[i];
+              final isActive = activeTab == item.index;
+              final isCentre = item.index == 2;
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                child: Material(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => onTabChanged(item.index),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        gradient: isActive
+                            ? const LinearGradient(
+                                colors: [Color(0xFF22C55E), Color(0xFF16A34A)],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              )
+                            : null,
+                        color: isActive ? null : Colors.transparent,
+                        boxShadow: isActive
+                            ? [const BoxShadow(color: Color(0x5022C55E), blurRadius: 12, offset: Offset(0, 4))]
+                            : null,
+                      ),
+                      child: Row(children: [
+                        Icon(
+                          item.icon,
+                          size: isCentre ? 22 : 20,
+                          color: isActive
+                              ? Colors.white
+                              : isDarkMode ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          item.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                            color: isActive
+                                ? Colors.white
+                                : isDarkMode ? const Color(0xFFD1D5DB) : const Color(0xFF374151),
+                          ),
+                        ),
+                        if (isCentre) ...[
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: isActive ? Colors.white.withValues(alpha: 0.25) : active.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'PLAY',
+                              style: TextStyle(
+                                fontSize: 8,
+                                fontWeight: FontWeight.w800,
+                                color: isActive ? Colors.white : active,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ]),
+                    ),
+                  ),
+                ),
+              );
+            }),
+
+            const Spacer(),
+
+            // ── Dark mode toggle ───────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Material(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => onDarkModeChanged(!isDarkMode),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color: isDarkMode
+                          ? const Color(0xFF1F2937)
+                          : const Color(0xFFF3F4F6),
+                      border: Border.all(
+                        color: isDarkMode ? const Color(0xFF374151) : const Color(0xFFE5E7EB),
+                      ),
+                    ),
+                    child: Row(children: [
+                      Icon(
+                        isDarkMode ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+                        size: 18,
+                        color: isDarkMode ? const Color(0xFFFBBF24) : const Color(0xFF6B7280),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        isDarkMode ? 'Light Mode' : 'Dark Mode',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode ? const Color(0xFFD1D5DB) : const Color(0xFF374151),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ─── Parabolic Nav Bar ────────────────────────────────────────────────────────

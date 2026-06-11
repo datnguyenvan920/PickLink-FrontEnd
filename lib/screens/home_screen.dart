@@ -71,12 +71,20 @@ IconData _tierIcon(PlayerTier t) {
 
 // ─── Static Data ─────────────────────────────────────────────────────────────
 
-const _initialPlayers = <_Player?>[
-  _Player(id: 1, name: 'Minh Tú', avatar: 'MT', rating: 4.2, tier: PlayerTier.gold, isCurrentUser: true),
-  _Player(id: 2, name: 'Lan Anh', avatar: 'LA', rating: 3.8, tier: PlayerTier.silver),
-  null,
-  null,
-];
+List<_Player?> _makeInitialPlayers(int size) {
+  if (size == 2) {
+    return [
+      const _Player(id: 1, name: 'Minh Tú', avatar: 'MT', rating: 4.2, tier: PlayerTier.gold, isCurrentUser: true),
+      null,
+    ];
+  }
+  return [
+    const _Player(id: 1, name: 'Minh Tú', avatar: 'MT', rating: 4.2, tier: PlayerTier.gold, isCurrentUser: true),
+    const _Player(id: 2, name: 'Lan Anh', avatar: 'LA', rating: 3.8, tier: PlayerTier.silver),
+    null,
+    null,
+  ];
+}
 
 const _adPosts = [
   _AdPost(id: 1, isAd: true,  brand: 'PicklePro Gear',         brandIcon: '🏓', title: 'Mùa hè này – Nâng cấp cú đánh của bạn!',    body: 'Bộ vợt PicklePro Carbon Series giảm 30% – chỉ trong tuần này. Nhẹ hơn, kiểm soát tốt hơn.', cta: 'Mua ngay',     likes: 142, comments: 18),
@@ -99,13 +107,30 @@ class _HomeScreenState extends State<HomeScreen> {
   String _locationLabel = 'Hà Nội';
   String _locationDistance = '3km';
   bool _searching = false;
-  List<_Player?> _players = List.from(_initialPlayers);
+  int _lobbySize = 4;
+  double _availableHours = 2.0;
+  late List<_Player?> _players;
   Timer? _searchTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _players = _makeInitialPlayers(_lobbySize);
+  }
 
   @override
   void dispose() {
     _searchTimer?.cancel();
     super.dispose();
+  }
+
+  void _changeLobbySize(int size) {
+    _searchTimer?.cancel();
+    setState(() {
+      _lobbySize = size;
+      _searching = false;
+      _players = _makeInitialPlayers(size);
+    });
   }
 
   void _findMatch() {
@@ -125,7 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _leaveSearch() {
     _searchTimer?.cancel();
-    setState(() { _searching = false; _players = List.from(_initialPlayers); });
+    setState(() { _searching = false; _players = _makeInitialPlayers(_lobbySize); });
   }
 
   int get _filled => _players.where((p) => p != null).length;
@@ -136,7 +161,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Stack(
       children: [
-        // Main scrollable content
         SingleChildScrollView(
           physics: const ClampingScrollPhysics(),
           padding: const EdgeInsets.only(bottom: 100),
@@ -144,13 +168,23 @@ class _HomeScreenState extends State<HomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _HomeTopBar(dark: dark, label: _locationLabel, distance: _locationDistance, onLocationTap: () => setState(() => _showMapModal = true)),
-              _LobbySection(dark: dark, players: _players, filled: _filled, searching: _searching, onFindMatch: _findMatch, onLeave: _leaveSearch),
+              _LobbySection(
+                dark: dark,
+                players: _players,
+                filled: _filled,
+                searching: _searching,
+                lobbySize: _lobbySize,
+                availableHours: _availableHours,
+                onFindMatch: _findMatch,
+                onLeave: _leaveSearch,
+                onLobbySizeChanged: _changeLobbySize,
+                onAvailableHoursChanged: (h) => setState(() => _availableHours = h),
+              ),
               _Divider(dark: dark),
               _AdsFeed(dark: dark),
             ],
           ),
         ),
-        // Map modal overlay
         if (_showMapModal)
           _MockMapModal(
             dark: dark,
@@ -230,10 +264,25 @@ class _LobbySection extends StatelessWidget {
   final List<_Player?> players;
   final int filled;
   final bool searching;
+  final int lobbySize;
+  final double availableHours;
   final VoidCallback onFindMatch;
   final VoidCallback onLeave;
+  final ValueChanged<int> onLobbySizeChanged;
+  final ValueChanged<double> onAvailableHoursChanged;
 
-  const _LobbySection({required this.dark, required this.players, required this.filled, required this.searching, required this.onFindMatch, required this.onLeave});
+  const _LobbySection({
+    required this.dark,
+    required this.players,
+    required this.filled,
+    required this.searching,
+    required this.lobbySize,
+    required this.availableHours,
+    required this.onFindMatch,
+    required this.onLeave,
+    required this.onLobbySizeChanged,
+    required this.onAvailableHoursChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -241,38 +290,57 @@ class _LobbySection extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
       child: Column(
         children: [
-          // Header row
+          // ── Header row ────────────────────────────────────────────────
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('🏓 Phòng chờ trận', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: dark ? Colors.white : const Color(0xFF111827))),
                 const SizedBox(height: 2),
-                Text('$filled/4 người chơi đã sẵn sàng', style: TextStyle(fontSize: 11, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+                Text('$filled/$lobbySize người chơi đã sẵn sàng', style: TextStyle(fontSize: 11, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
               ]),
               _SearchingBadge(dark: dark, searching: searching),
             ],
           ),
-          const SizedBox(height: 14),
-          // Progress bar
+          const SizedBox(height: 12),
+
+          // ── Lobby size selector ───────────────────────────────────────
+          Row(
+            children: [
+              Icon(Icons.groups_outlined, size: 14, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+              const SizedBox(width: 6),
+              Text('Cỡ lobby:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+              const SizedBox(width: 10),
+              _LobbySizeToggle(lobbySize: lobbySize, dark: dark, onChanged: onLobbySizeChanged),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // ── Progress bar ──────────────────────────────────────────────
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: LinearProgressIndicator(
-              value: filled / 4,
+              value: filled / lobbySize,
               minHeight: 6,
               backgroundColor: dark ? const Color(0xFF374151) : const Color(0xFFF3F4F6),
               valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF22C55E)),
             ),
           ),
           const SizedBox(height: 20),
-          // 2×2 Player grid
+
+          // ── Player grid (dynamic 2 or 4 slots) ───────────────────────
           GridView.count(
-            crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12,
-            shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), childAspectRatio: 0.88,
-            children: List.generate(4, (i) => _PlayerSlot(player: players[i], index: i, dark: dark)),
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            childAspectRatio: lobbySize == 2 ? 1.05 : 0.88,
+            children: List.generate(lobbySize, (i) => _PlayerSlot(player: players[i], index: i, dark: dark)),
           ),
           const SizedBox(height: 20),
-          // VS divider
+
+          // ── VS divider ────────────────────────────────────────────────
           Row(children: [
             Expanded(child: Divider(color: dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB))),
             Container(
@@ -284,10 +352,20 @@ class _LobbySection extends StatelessWidget {
             Expanded(child: Divider(color: dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB))),
           ]),
           const SizedBox(height: 20),
-          // Court info
+
+          // ── Court info ────────────────────────────────────────────────
           _CourtCard(dark: dark),
           const SizedBox(height: 14),
-          // Action buttons
+
+          // ── Time availability slider ───────────────────────────────────
+          _TimeAvailabilitySlider(
+            hours: availableHours,
+            dark: dark,
+            onChanged: onAvailableHoursChanged,
+          ),
+          const SizedBox(height: 14),
+
+          // ── Action buttons ────────────────────────────────────────────
           Row(children: [
             Expanded(
               child: searching
@@ -302,17 +380,17 @@ class _LobbySection extends StatelessWidget {
                       child: const Text('Hủy tìm', style: TextStyle(fontWeight: FontWeight.bold)),
                     )
                   : ElevatedButton(
-                      onPressed: filled == 4 ? null : onFindMatch,
+                      onPressed: filled == lobbySize ? null : onFindMatch,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: filled == 4 ? const Color(0xFFD1D5DB) : const Color(0xFF22C55E),
+                        backgroundColor: filled == lobbySize ? const Color(0xFFD1D5DB) : const Color(0xFF22C55E),
                         disabledBackgroundColor: const Color(0xFFD1D5DB),
-                        foregroundColor: filled == 4 ? const Color(0xFF9CA3AF) : Colors.white,
+                        foregroundColor: filled == lobbySize ? const Color(0xFF9CA3AF) : Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        elevation: filled == 4 ? 0 : 4,
+                        elevation: filled == lobbySize ? 0 : 4,
                         shadowColor: const Color(0x6622C55E),
                       ),
-                      child: Text(filled == 4 ? '🎉 Đủ người!' : '🔍 Tìm người chơi', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(filled == lobbySize ? '🎉 Đủ người!' : '🔍 Tìm người chơi', style: const TextStyle(fontWeight: FontWeight.bold)),
                     ),
             ),
             const SizedBox(width: 10),
@@ -772,4 +850,198 @@ class _GridPainter extends CustomPainter {
     for (double y = 0; y < size.height; y += 40) { canvas.drawLine(Offset(0, y), Offset(size.width, y), p); }
   }
   @override bool shouldRepaint(_GridPainter _) => false;
+}
+
+// ─── Lobby Size Toggle ────────────────────────────────────────────────────────
+
+class _LobbySizeToggle extends StatelessWidget {
+  final int lobbySize;
+  final bool dark;
+  final ValueChanged<int> onChanged;
+  const _LobbySizeToggle({required this.lobbySize, required this.dark, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF374151) : const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [2, 4].map((size) {
+          final isSelected = lobbySize == size;
+          return GestureDetector(
+            onTap: () => onChanged(size),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+              decoration: BoxDecoration(
+                gradient: isSelected
+                    ? const LinearGradient(colors: [Color(0xFF22C55E), Color(0xFF16A34A)])
+                    : null,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: isSelected
+                    ? [const BoxShadow(color: Color(0x4022C55E), blurRadius: 8, offset: Offset(0, 2))]
+                    : null,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    size == 2 ? Icons.person : Icons.group,
+                    size: 12,
+                    color: isSelected ? Colors.white : dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '$size người',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected ? Colors.white : dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+// ─── Time Availability Slider ─────────────────────────────────────────────────
+
+class _TimeAvailabilitySlider extends StatelessWidget {
+  final double hours;
+  final bool dark;
+  final ValueChanged<double> onChanged;
+  const _TimeAvailabilitySlider({required this.hours, required this.dark, required this.onChanged});
+
+  String _qualityLabel(double h) {
+    if (h < 3) return 'Tối thiểu';
+    if (h < 5) return 'Tốt';
+    if (h < 7) return 'Rất tốt';
+    return 'Xuất sắc ✨';
+  }
+
+  Color _qualityColor(double h) {
+    if (h < 3) return const Color(0xFFEF4444);
+    if (h < 5) return const Color(0xFFF59E0B);
+    if (h < 7) return const Color(0xFF84CC16);
+    return const Color(0xFF22C55E);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final qual = _qualityColor(hours);
+    final hoursLabel = hours % 1 == 0 ? '${hours.toInt()}' : hours.toStringAsFixed(1);
+    final cardBg = dark ? const Color(0xFF1F2937) : const Color(0xFFF9FAFB);
+    final border = dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title + quality badge
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(children: [
+                const Text('⏰', style: TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
+                Text('Thời gian rảnh', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: dark ? Colors.white : const Color(0xFF111827))),
+              ]),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 280),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                decoration: BoxDecoration(
+                  color: qual.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: qual.withValues(alpha: 0.45)),
+                ),
+                child: Text(
+                  _qualityLabel(hours),
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: qual),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Big time value
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(hoursLabel, style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900, color: qual)),
+              const SizedBox(width: 5),
+              Text('tiếng', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+            ],
+          ),
+          const SizedBox(height: 2),
+
+          // Slider
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: qual,
+              inactiveTrackColor: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
+              thumbColor: qual,
+              overlayColor: qual.withValues(alpha: 0.18),
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              trackHeight: 4,
+            ),
+            child: Slider(
+              value: hours,
+              min: 2.0,
+              max: 8.0,
+              divisions: 12,
+              onChanged: onChanged,
+            ),
+          ),
+          const SizedBox(height: 2),
+
+          // Gradient quality bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              height: 5,
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFFEF4444), Color(0xFFF59E0B), Color(0xFF84CC16), Color(0xFF22C55E)],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // Footer labels
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('2h', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: const Color(0xFFEF4444).withValues(alpha: 0.75))),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.trending_up_rounded, size: 10, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                const SizedBox(width: 3),
+                Text(
+                  'Thời gian nhiều hơn → Cặp đấu tốt hơn',
+                  style: TextStyle(fontSize: 9, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                ),
+              ]),
+              Text('8h', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: const Color(0xFF22C55E).withValues(alpha: 0.75))),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
