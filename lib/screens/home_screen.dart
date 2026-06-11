@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'map_screen.dart';
 
 // ─── Enums & Models ──────────────────────────────────────────────────────────
 
@@ -103,12 +104,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _showMapModal = false;
   String _locationLabel = 'Hà Nội';
   String _locationDistance = '3km';
   bool _searching = false;
   int _lobbySize = 4;
   double _availableHours = 2.0;
+  double _startHour = 8.0; // 0‒22 (start of queue window)
   late List<_Player?> _players;
   Timer? _searchTimer;
 
@@ -155,43 +156,43 @@ class _HomeScreenState extends State<HomeScreen> {
 
   int get _filled => _players.where((p) => p != null).length;
 
+  void _openMapScreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MapScreen(isDarkMode: widget.isDarkMode),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final dark = widget.isDarkMode;
 
-    return Stack(
-      children: [
-        SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 100),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _HomeTopBar(dark: dark, label: _locationLabel, distance: _locationDistance, onLocationTap: () => setState(() => _showMapModal = true)),
-              _LobbySection(
-                dark: dark,
-                players: _players,
-                filled: _filled,
-                searching: _searching,
-                lobbySize: _lobbySize,
-                availableHours: _availableHours,
-                onFindMatch: _findMatch,
-                onLeave: _leaveSearch,
-                onLobbySizeChanged: _changeLobbySize,
-                onAvailableHoursChanged: (h) => setState(() => _availableHours = h),
-              ),
-              _Divider(dark: dark),
-              _AdsFeed(dark: dark),
-            ],
-          ),
-        ),
-        if (_showMapModal)
-          _MockMapModal(
+    return SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 100),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _HomeTopBar(dark: dark, label: _locationLabel, distance: _locationDistance, onLocationTap: _openMapScreen),
+          _LobbySection(
             dark: dark,
-            onClose: () => setState(() => _showMapModal = false),
-            onConfirm: (label) => setState(() { _locationLabel = label; _locationDistance = 'Tuỳ chỉnh'; _showMapModal = false; }),
+            players: _players,
+            filled: _filled,
+            searching: _searching,
+            lobbySize: _lobbySize,
+            availableHours: _availableHours,
+            startHour: _startHour,
+            onFindMatch: _findMatch,
+            onLeave: _leaveSearch,
+            onLobbySizeChanged: _changeLobbySize,
+            onAvailableHoursChanged: (h) => setState(() => _availableHours = h),
+            onStartHourChanged: (h) => setState(() => _startHour = h),
           ),
-      ],
+          _Divider(dark: dark),
+          _AdsFeed(dark: dark),
+        ],
+      ),
     );
   }
 }
@@ -266,10 +267,12 @@ class _LobbySection extends StatelessWidget {
   final bool searching;
   final int lobbySize;
   final double availableHours;
+  final double startHour;
   final VoidCallback onFindMatch;
   final VoidCallback onLeave;
   final ValueChanged<int> onLobbySizeChanged;
   final ValueChanged<double> onAvailableHoursChanged;
+  final ValueChanged<double> onStartHourChanged;
 
   const _LobbySection({
     required this.dark,
@@ -278,14 +281,42 @@ class _LobbySection extends StatelessWidget {
     required this.searching,
     required this.lobbySize,
     required this.availableHours,
+    required this.startHour,
     required this.onFindMatch,
     required this.onLeave,
     required this.onLobbySizeChanged,
     required this.onAvailableHoursChanged,
+    required this.onStartHourChanged,
   });
+
+  Widget _vsDivider(bool dark) {
+    return Row(children: [
+      Expanded(child: Divider(color: dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB))),
+      Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [Color(0xFF22C55E), Color(0xFF16A34A)]),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [const BoxShadow(color: Color(0x3322C55E), blurRadius: 8, offset: Offset(0, 2))],
+        ),
+        child: const Text('── VS ──', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1)),
+      ),
+      Expanded(child: Divider(color: dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB))),
+    ]);
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Detect web/wide screen to use smaller slots
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWide = screenWidth > 600;
+
+    // Slot aspect ratios: wider screen → taller ratio (shorter card)
+    final slotAspect = isWide
+        ? (lobbySize == 2 ? 2.2 : 1.8)
+        : (lobbySize == 2 ? 1.05 : 0.88);
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
       child: Column(
@@ -326,42 +357,56 @@ class _LobbySection extends StatelessWidget {
               valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF22C55E)),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
-          // ── Player grid (dynamic 2 or 4 slots) ───────────────────────
+          // ── Team A slots ──────────────────────────────────────────────
           GridView.count(
             crossAxisCount: 2,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: lobbySize == 2 ? 1.05 : 0.88,
-            children: List.generate(lobbySize, (i) => _PlayerSlot(player: players[i], index: i, dark: dark)),
-          ),
-          const SizedBox(height: 20),
-
-          // ── VS divider ────────────────────────────────────────────────
-          Row(children: [
-            Expanded(child: Divider(color: dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB))),
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: BoxDecoration(color: dark ? const Color(0xFF374151) : const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(14)),
-              child: Text('VS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: dark ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280))),
+            childAspectRatio: slotAspect,
+            children: List.generate(
+              lobbySize == 2 ? 1 : 2,
+              (i) => _PlayerSlot(player: players[i], index: i, dark: dark, isWeb: isWide),
             ),
-            Expanded(child: Divider(color: dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB))),
-          ]),
+          ),
+          const SizedBox(height: 14),
+
+          // ── VS divider (between teams) ────────────────────────────────
+          _vsDivider(dark),
+          const SizedBox(height: 14),
+
+          // ── Team B slots ──────────────────────────────────────────────
+          GridView.count(
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            childAspectRatio: slotAspect,
+            children: List.generate(
+              lobbySize == 2 ? 1 : 2,
+              (i) {
+                final idx = lobbySize == 2 ? i + 1 : i + 2;
+                return _PlayerSlot(player: players[idx], index: idx, dark: dark, isWeb: isWide);
+              },
+            ),
+          ),
           const SizedBox(height: 20),
 
           // ── Court info ────────────────────────────────────────────────
           _CourtCard(dark: dark),
           const SizedBox(height: 14),
 
-          // ── Time availability slider ───────────────────────────────────
+          // ── Time availability sliders ──────────────────────────────────
           _TimeAvailabilitySlider(
             hours: availableHours,
+            startHour: startHour,
             dark: dark,
-            onChanged: onAvailableHoursChanged,
+            onHoursChanged: onAvailableHoursChanged,
+            onStartHourChanged: onStartHourChanged,
           ),
           const SizedBox(height: 14),
 
@@ -474,10 +519,20 @@ class _PlayerSlot extends StatelessWidget {
   final _Player? player;
   final int index;
   final bool dark;
-  const _PlayerSlot({required this.player, required this.index, required this.dark});
+  final bool isWeb;
+  const _PlayerSlot({required this.player, required this.index, required this.dark, this.isWeb = false});
 
   @override
   Widget build(BuildContext context) {
+    // Use smaller avatar/font sizes on wide (web) screens
+    final double avatarSize = isWeb ? 34 : 52;
+    final double plusSize   = isWeb ? 14 : 22;
+    final double nameFontSize  = isWeb ? 9  : 10;
+    final double tierFontSize  = isWeb ? 7  : 8;
+    final double ratingFontSize = isWeb ? 8 : 9;
+    final double tierIconSize  = isWeb ? 7  : 9;
+    final double starSize      = isWeb ? 7  : 9;
+
     if (player == null) {
       return Container(
         decoration: BoxDecoration(
@@ -487,13 +542,13 @@ class _PlayerSlot extends StatelessWidget {
         ),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Container(
-            width: 52, height: 52,
+            width: avatarSize, height: avatarSize,
             decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: dark ? const Color(0xFF6B7280) : const Color(0xFFD1D5DB), width: 2)),
-            child: Center(child: Text('+', style: TextStyle(fontSize: 22, color: dark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)))),
+            child: Center(child: Text('+', style: TextStyle(fontSize: plusSize, color: dark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)))),
           ),
-          const SizedBox(height: 6),
-          Text('Chờ người chơi', style: TextStyle(fontSize: 10, color: dark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF))),
-          const SizedBox(height: 3),
+          SizedBox(height: isWeb ? 3 : 6),
+          Text('Chờ người chơi', style: TextStyle(fontSize: nameFontSize, color: dark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF))),
+          SizedBox(height: isWeb ? 2 : 3),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(color: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(10)),
@@ -517,35 +572,35 @@ class _PlayerSlot extends StatelessWidget {
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         Stack(clipBehavior: Clip.none, children: [
           Container(
-            width: 52, height: 52,
+            width: avatarSize, height: avatarSize,
             decoration: BoxDecoration(gradient: grad, shape: BoxShape.circle),
-            child: Center(child: Text(p.avatar, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15))),
+            child: Center(child: Text(p.avatar, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: isWeb ? 10 : 15))),
           ),
           if (p.isCurrentUser)
             Positioned(top: -4, right: -4,
               child: Container(
-                width: 18, height: 18,
+                width: isWeb ? 13 : 18, height: isWeb ? 13 : 18,
                 decoration: BoxDecoration(color: const Color(0xFF22C55E), shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
-                child: const Center(child: Text('Y', style: TextStyle(color: Colors.white, fontSize: 7, fontWeight: FontWeight.bold))),
+                child: Center(child: Text('Y', style: TextStyle(color: Colors.white, fontSize: isWeb ? 5 : 7, fontWeight: FontWeight.bold))),
               )),
         ]),
-        const SizedBox(height: 5),
-        Text(p.name, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: dark ? Colors.white : const Color(0xFF111827))),
-        const SizedBox(height: 3),
+        SizedBox(height: isWeb ? 3 : 5),
+        Text(p.name, style: TextStyle(fontSize: nameFontSize, fontWeight: FontWeight.w600, color: dark ? Colors.white : const Color(0xFF111827))),
+        SizedBox(height: isWeb ? 2 : 3),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
           decoration: BoxDecoration(gradient: grad, borderRadius: BorderRadius.circular(10)),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(_tierIcon(p.tier), size: 9, color: tc),
+            Icon(_tierIcon(p.tier), size: tierIconSize, color: tc),
             const SizedBox(width: 2),
-            Text(_tierName(p.tier), style: TextStyle(fontSize: 8, color: tc, fontWeight: FontWeight.w600)),
+            Text(_tierName(p.tier), style: TextStyle(fontSize: tierFontSize, color: tc, fontWeight: FontWeight.w600)),
           ]),
         ),
-        const SizedBox(height: 2),
+        SizedBox(height: isWeb ? 1 : 2),
         Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.star, size: 9, color: Color(0xFFFACC15)),
+          Icon(Icons.star, size: starSize, color: const Color(0xFFFACC15)),
           const SizedBox(width: 2),
-          Text(p.rating.toStringAsFixed(1), style: TextStyle(fontSize: 9, color: dark ? const Color(0xFFD1D5DB) : const Color(0xFF4B5563))),
+          Text(p.rating.toStringAsFixed(1), style: TextStyle(fontSize: ratingFontSize, color: dark ? const Color(0xFFD1D5DB) : const Color(0xFF4B5563))),
         ]),
       ]),
     );
@@ -758,99 +813,7 @@ class _AdCardState extends State<_AdCard> {
   }
 }
 
-// ─── Mock Map Modal ───────────────────────────────────────────────────────────
 
-class _MockMapModal extends StatelessWidget {
-  final bool dark;
-  final VoidCallback onClose;
-  final ValueChanged<String> onConfirm;
-  const _MockMapModal({required this.dark, required this.onClose, required this.onConfirm});
-
-  @override
-  Widget build(BuildContext context) {
-    final hdrBg = dark ? const Color(0xFF111827) : Colors.white;
-    return Material(
-      color: Colors.black.withValues(alpha: 0.72),
-      child: Column(children: [
-        // Header
-        Container(
-          color: hdrBg,
-          padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Chọn khu vực tìm trận', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: dark ? Colors.white : const Color(0xFF111827))),
-              Text('Nhấn để đặt vị trí thủ công', style: TextStyle(fontSize: 11, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
-            ]),
-            IconButton(onPressed: onClose, icon: Icon(Icons.close, color: dark ? Colors.white : const Color(0xFF1F2937))),
-          ]),
-        ),
-        // Map canvas
-        Expanded(child: Stack(children: [
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [Color(0xFF064E3B), Color(0xFF065F46), Color(0xFF0F766E)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-            ),
-          ),
-          CustomPaint(painter: _GridPainter(), size: Size.infinite),
-          // Centre pin
-          Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(color: const Color(0xFF22C55E).withValues(alpha: 0.85), shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: const Color(0xFF22C55E).withValues(alpha: 0.5), blurRadius: 20)]),
-              child: const Icon(Icons.location_on, color: Colors.white, size: 26),
-            ),
-            const SizedBox(height: 8),
-            const Text('Hà Nội', style: TextStyle(color: Color(0xFFBBF7D0), fontSize: 12, fontWeight: FontWeight.w600)),
-          ])),
-          // Fake venue dots
-          ...const [Alignment(-0.6, -0.5), Alignment(0.5, -0.2), Alignment(-0.7, 0.4), Alignment(0.6, 0.5), Alignment(0.2, -0.7)].map(
-            (a) => Align(alignment: a, child: Container(width: 11, height: 11,
-              decoration: const BoxDecoration(color: Color(0xFFFACC15), shape: BoxShape.circle, boxShadow: [BoxShadow(color: Color(0x80FACC15), blurRadius: 6)]))),
-          ),
-          Positioned(bottom: 12, left: 0, right: 0, child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(10)),
-              child: const Text('Thêm API key Google Maps để tương tác đầy đủ', style: TextStyle(color: Colors.white70, fontSize: 10)),
-            ),
-          )),
-        ])),
-        // Confirm
-        Container(
-          color: hdrBg,
-          padding: const EdgeInsets.all(14),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => onConfirm('Hà Nội'),
-              icon: const Icon(Icons.location_on_outlined, size: 17),
-              label: const Text('Xác nhận vị trí: Hà Nội', style: TextStyle(fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF22C55E),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                elevation: 4,
-                shadowColor: const Color(0x6622C55E),
-              ),
-            ),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _GridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = Colors.white.withValues(alpha: 0.07)..strokeWidth = 0.5;
-    for (double x = 0; x < size.width; x += 40) { canvas.drawLine(Offset(x, 0), Offset(x, size.height), p); }
-    for (double y = 0; y < size.height; y += 40) { canvas.drawLine(Offset(0, y), Offset(size.width, y), p); }
-  }
-  @override bool shouldRepaint(_GridPainter _) => false;
-}
 
 // ─── Lobby Size Toggle ────────────────────────────────────────────────────────
 
@@ -872,6 +835,7 @@ class _LobbySizeToggle extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [2, 4].map((size) {
           final isSelected = lobbySize == size;
+          final label = size == 2 ? '1v1' : '2v2';
           return GestureDetector(
             onTap: () => onChanged(size),
             child: AnimatedContainer(
@@ -896,7 +860,7 @@ class _LobbySizeToggle extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    '$size người',
+                    label,
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
@@ -916,10 +880,19 @@ class _LobbySizeToggle extends StatelessWidget {
 // ─── Time Availability Slider ─────────────────────────────────────────────────
 
 class _TimeAvailabilitySlider extends StatelessWidget {
-  final double hours;
+  final double hours;      // duration willing to spend (2‒8 h)
+  final double startHour;  // start of preferred window (0‒22)
   final bool dark;
-  final ValueChanged<double> onChanged;
-  const _TimeAvailabilitySlider({required this.hours, required this.dark, required this.onChanged});
+  final ValueChanged<double> onHoursChanged;
+  final ValueChanged<double> onStartHourChanged;
+
+  const _TimeAvailabilitySlider({
+    required this.hours,
+    required this.startHour,
+    required this.dark,
+    required this.onHoursChanged,
+    required this.onStartHourChanged,
+  });
 
   String _qualityLabel(double h) {
     if (h < 3) return 'Tối thiểu';
@@ -935,12 +908,22 @@ class _TimeAvailabilitySlider extends StatelessWidget {
     return const Color(0xFF22C55E);
   }
 
+  String _formatHour(double h) {
+    final hh = h.toInt().toString().padLeft(2, '0');
+    return '$hh:00';
+  }
+
   @override
   Widget build(BuildContext context) {
     final qual = _qualityColor(hours);
     final hoursLabel = hours % 1 == 0 ? '${hours.toInt()}' : hours.toStringAsFixed(1);
     final cardBg = dark ? const Color(0xFF1F2937) : const Color(0xFFF9FAFB);
     final border = dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB);
+
+    // Window position as fraction of 24h bar
+    final winStart = startHour / 24.0;
+    final winEnd   = ((startHour + hours) / 24.0).clamp(0.0, 1.0);
+    final endHour  = (startHour + hours).clamp(0.0, 24.0);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
@@ -952,7 +935,7 @@ class _TimeAvailabilitySlider extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Title + quality badge
+          // ── Title + quality badge ────────────────────────────────────
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -976,70 +959,171 @@ class _TimeAvailabilitySlider extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
 
-          // Big time value
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(hoursLabel, style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900, color: qual)),
-              const SizedBox(width: 5),
-              Text('tiếng', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
-            ],
-          ),
-          const SizedBox(height: 2),
-
-          // Slider
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              activeTrackColor: qual,
-              inactiveTrackColor: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
-              thumbColor: qual,
-              overlayColor: qual.withValues(alpha: 0.18),
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-              trackHeight: 4,
+          // ── Slider 1: Duration ───────────────────────────────────────
+          Row(children: [
+            Container(
+              width: 22, height: 22,
+              decoration: BoxDecoration(color: qual.withValues(alpha: 0.15), shape: BoxShape.circle),
+              child: Center(child: Icon(Icons.timelapse_rounded, size: 12, color: qual)),
             ),
-            child: Slider(
-              value: hours,
-              min: 2.0,
-              max: 8.0,
-              divisions: 12,
-              onChanged: onChanged,
-            ),
-          ),
-          const SizedBox(height: 2),
-
-          // Gradient quality bar
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Container(
-              height: 5,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFFEF4444), Color(0xFFF59E0B), Color(0xFF84CC16), Color(0xFF22C55E)],
-                ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Thời lượng sẵn sàng', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+                      Text(
+                        '$hoursLabel tiếng',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: qual),
+                      ),
+                    ],
+                  ),
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: qual,
+                      inactiveTrackColor: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
+                      thumbColor: qual,
+                      overlayColor: qual.withValues(alpha: 0.18),
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                      trackHeight: 4,
+                    ),
+                    child: Slider(
+                      value: hours,
+                      min: 1.0,
+                      max: 8.0,
+                      divisions: 14,
+                      onChanged: onHoursChanged,
+                    ),
+                  ),
+                ],
               ),
             ),
+          ]),
+
+          const SizedBox(height: 6),
+
+          // ── Slider 2: Start time ─────────────────────────────────────
+          Row(children: [
+            Container(
+              width: 22, height: 22,
+              decoration: BoxDecoration(color: const Color(0xFF6366F1).withValues(alpha: 0.15), shape: BoxShape.circle),
+              child: const Center(child: Icon(Icons.schedule_rounded, size: 12, color: Color(0xFF6366F1))),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Khung giờ bắt đầu', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+                      Text(
+                        '${_formatHour(startHour)} – ${_formatHour(endHour)}',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF6366F1)),
+                      ),
+                    ],
+                  ),
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: const Color(0xFF6366F1),
+                      inactiveTrackColor: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
+                      thumbColor: const Color(0xFF6366F1),
+                      overlayColor: const Color(0xFF6366F1).withValues(alpha: 0.18),
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                      trackHeight: 4,
+                    ),
+                    child: Slider(
+                      value: startHour,
+                      min: 0.0,
+                      max: 22.0,
+                      divisions: 44, // 30-min steps
+                      onChanged: onStartHourChanged,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ]),
+
+          const SizedBox(height: 10),
+
+          // ── 24h day bar showing the selected window ──────────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Vị trí trong ngày', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+              const SizedBox(height: 4),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final total = constraints.maxWidth;
+                  final leftPx  = total * winStart;
+                  final widthPx = (total * (winEnd - winStart)).clamp(4.0, total);
+                  return Stack(
+                    children: [
+                      // Background bar (gradient – full day)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          height: 14,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                dark ? const Color(0xFF1E3A5F) : const Color(0xFFDBEAFE), // night/morning
+                                const Color(0xFFFDE68A), // noon
+                                const Color(0xFFFB923C), // afternoon
+                                dark ? const Color(0xFF1E1B4B) : const Color(0xFFE0E7FF), // evening
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Highlight window
+                      Positioned(
+                        left: leftPx,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            width: widthPx,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6366F1).withValues(alpha: 0.65),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF6366F1), width: 1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 3),
+              // Hour labels
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: ['00:00', '06:00', '12:00', '18:00', '24:00'].map((t) =>
+                  Text(t, style: TextStyle(fontSize: 8, color: dark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF))),
+                ).toList(),
+              ),
+            ],
           ),
           const SizedBox(height: 6),
 
-          // Footer labels
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('2h', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: const Color(0xFFEF4444).withValues(alpha: 0.75))),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.trending_up_rounded, size: 10, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
-                const SizedBox(width: 3),
-                Text(
-                  'Thời gian nhiều hơn → Cặp đấu tốt hơn',
-                  style: TextStyle(fontSize: 9, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
-                ),
-              ]),
-              Text('8h', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: const Color(0xFF22C55E).withValues(alpha: 0.75))),
-            ],
-          ),
+          // ── Footer hint ──────────────────────────────────────────────
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.trending_up_rounded, size: 10, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+            const SizedBox(width: 3),
+            Text(
+              'Thời gian nhiều hơn → Cặp đấu tốt hơn',
+              style: TextStyle(fontSize: 9, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+            ),
+          ]),
         ],
       ),
     );
