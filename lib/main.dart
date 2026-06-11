@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/rank_screen.dart';
 import 'screens/social_screen.dart';
@@ -19,7 +20,10 @@ class PickleMatchApp extends StatefulWidget {
 
 class _PickleMatchAppState extends State<PickleMatchApp> {
   bool _isDarkMode = false;
-  int _activeTab = 2; // Start on Home (centre)
+  int _activeTab = 2; // Start on Play (centre)
+  bool _authed = false;  // false = show auth screen first
+
+  void _onAuthSuccess() => setState(() => _authed = true);
 
   @override
   Widget build(BuildContext context) {
@@ -29,12 +33,14 @@ class _PickleMatchAppState extends State<PickleMatchApp> {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: _isDarkMode ? ThemeMode.dark : ThemeMode.light,
-      home: _RootScaffold(
-        isDarkMode: _isDarkMode,
-        activeTab: _activeTab,
-        onTabChanged: (i) => setState(() => _activeTab = i),
-        onDarkModeChanged: (v) => setState(() => _isDarkMode = v),
-      ),
+      home: _authed
+          ? _RootScaffold(
+              isDarkMode: _isDarkMode,
+              activeTab: _activeTab,
+              onTabChanged: (i) => setState(() => _activeTab = i),
+              onDarkModeChanged: (v) => setState(() => _isDarkMode = v),
+            )
+          : AuthScreen(onAuthSuccess: _onAuthSuccess),
     );
   }
 }
