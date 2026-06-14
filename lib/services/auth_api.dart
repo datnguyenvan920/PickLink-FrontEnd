@@ -53,6 +53,18 @@ class AuthApi {
     return AuthSession.fromJson(_decodeObject(response));
   }
 
+  Future<AuthSession> loginWithGoogle({required String idToken}) async {
+    final response = await _client.post(
+      _uri('/api/auth/google'),
+      headers: _jsonHeaders(),
+      body: jsonEncode({
+        'idToken': idToken,
+      }),
+    );
+
+    return AuthSession.fromJson(_decodeObject(response));
+  }
+
   Future<AuthUser> me(String token) async {
     final response = await _client.get(
       _uri('/api/auth/me'),
@@ -93,7 +105,44 @@ class AuthApi {
       return message;
     }
 
-    return 'Request failed with status $statusCode.';
+    final errorsMessage = _extractValidationError(body['errors']);
+    if (errorsMessage != null) {
+      return errorsMessage;
+    }
+
+    final detail = body['detail'];
+    if (detail is String && detail.trim().isNotEmpty) {
+      return detail;
+    }
+
+    final title = body['title'];
+    if (title is String && title.trim().isNotEmpty) {
+      return title;
+    }
+
+    return 'Yêu cầu thất bại với mã trạng thái $statusCode.';
+  }
+
+  String? _extractValidationError(Object? errors) {
+    if (errors is! Map<String, dynamic>) {
+      return null;
+    }
+
+    for (final value in errors.values) {
+      if (value is List) {
+        for (final item in value) {
+          if (item is String && item.trim().isNotEmpty) {
+            return item;
+          }
+        }
+      }
+
+      if (value is String && value.trim().isNotEmpty) {
+        return value;
+      }
+    }
+
+    return null;
   }
 }
 
