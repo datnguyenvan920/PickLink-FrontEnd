@@ -65,6 +65,42 @@ class AuthApi {
     return AuthSession.fromJson(_decodeObject(response));
   }
 
+  Future<ForgotPasswordResult> forgotPassword({required String email}) async {
+    final response = await _client.post(
+      _uri('/api/auth/forgot-password'),
+      headers: _jsonHeaders(),
+      body: jsonEncode({
+        'email': email,
+      }),
+    );
+
+    return ForgotPasswordResult.fromJson(_decodeObject(response));
+  }
+
+  Future<String> resetPassword({
+    required String email,
+    required String token,
+    required String newPassword,
+  }) async {
+    final response = await _client.post(
+      _uri('/api/auth/reset-password'),
+      headers: _jsonHeaders(),
+      body: jsonEncode({
+        'email': email,
+        'token': token,
+        'newPassword': newPassword,
+      }),
+    );
+
+    final decoded = _decodeObject(response);
+    final message = decoded['message'];
+    if (message is String && message.trim().isNotEmpty) {
+      return message;
+    }
+
+    return 'Đặt lại mật khẩu thành công.';
+  }
+
   Future<AuthUser> me(String token) async {
     final response = await _client.get(
       _uri('/api/auth/me'),
@@ -154,6 +190,24 @@ class ApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class ForgotPasswordResult {
+  final String message;
+  final DateTime? expiresAt;
+
+  const ForgotPasswordResult({
+    required this.message,
+    required this.expiresAt,
+  });
+
+  factory ForgotPasswordResult.fromJson(Map<String, dynamic> json) {
+    return ForgotPasswordResult(
+      message: json['message'] as String? ??
+          'Mã đặt lại mật khẩu đã được gửi qua email.',
+      expiresAt: DateTime.tryParse(json['expiresAt'] as String? ?? ''),
+    );
+  }
 }
 
 class AuthSession {
