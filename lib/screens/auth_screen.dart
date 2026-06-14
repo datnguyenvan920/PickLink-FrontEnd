@@ -393,6 +393,21 @@ String _authErrorMessage(Object error, String fallback) {
   return fallback;
 }
 
+Future<void> _showForgotPasswordDialog(
+  BuildContext context, {
+  String initialEmail = '',
+}) async {
+  final message = await showDialog<String>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _ForgotPasswordDialog(initialEmail: initialEmail),
+  );
+
+  if (message != null && context.mounted) {
+    _showAuthSnackBar(context, message, error: false);
+  }
+}
+
 class _LoginPanel extends StatefulWidget {
   final ValueChanged<AuthSession> onSuccess;
   final VoidCallback onSwitchToRegister;
@@ -570,7 +585,10 @@ class _LoginPanelState extends State<_LoginPanel> {
             Align(
               alignment: Alignment.centerRight,
               child: GestureDetector(
-                onTap: () {},
+                onTap: () => _showForgotPasswordDialog(
+                  context,
+                  initialEmail: _emailCtrl.text.trim(),
+                ),
                 child: Text(
                   'Forgot password?',
                   style: TextStyle(
@@ -913,6 +931,289 @@ class _RegisterPanelState extends State<_RegisterPanel> {
 }
 
 // ─── Shared Widgets ───────────────────────────────────────────────────────────
+
+class _ForgotPasswordDialog extends StatefulWidget {
+  final String initialEmail;
+
+  const _ForgotPasswordDialog({required this.initialEmail});
+
+  @override
+  State<_ForgotPasswordDialog> createState() => _ForgotPasswordDialogState();
+}
+
+class _ForgotPasswordDialogState extends State<_ForgotPasswordDialog> {
+  final _emailCtrl = TextEditingController();
+  final _tokenCtrl = TextEditingController();
+  final _newPasswordCtrl = TextEditingController();
+  final _confirmPasswordCtrl = TextEditingController();
+
+  bool _requesting = false;
+  bool _resetting = false;
+  bool _tokenRequested = false;
+  bool _obscureNewPassword = true;
+  bool _obscureConfirmPassword = true;
+  String? _statusMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailCtrl.text = widget.initialEmail;
+  }
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _tokenCtrl.dispose();
+    _newPasswordCtrl.dispose();
+    _confirmPasswordCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _requestResetToken() async {
+    final emailError = _emailError(_emailCtrl.text);
+    if (emailError != null) {
+      setState(() => _statusMessage = emailError);
+      return;
+    }
+
+    setState(() {
+      _requesting = true;
+      _statusMessage = null;
+    });
+
+    try {
+      final result = await AuthApi().forgotPassword(
+        email: _emailCtrl.text.trim(),
+      );
+
+      setState(() {
+        _tokenRequested = true;
+        _statusMessage = result.message;
+      });
+    } catch (error) {
+      setState(() {
+        _statusMessage = _authErrorMessage(
+          error,
+          'Không thể tạo mã đặt lại mật khẩu. Vui lòng kiểm tra máy chủ.',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _requesting = false);
+      }
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final validationMessage = _resetValidationMessage();
+    if (validationMessage != null) {
+      setState(() => _statusMessage = validationMessage);
+      return;
+    }
+
+    setState(() {
+      _resetting = true;
+      _statusMessage = null;
+    });
+
+    try {
+      final message = await AuthApi().resetPassword(
+        email: _emailCtrl.text.trim(),
+        token: _tokenCtrl.text.trim(),
+        newPassword: _newPasswordCtrl.text,
+      );
+
+      if (mounted) {
+        Navigator.of(context).pop(message);
+      }
+    } catch (error) {
+      setState(() {
+        _statusMessage = _authErrorMessage(
+          error,
+          'Không thể đặt lại mật khẩu. Vui lòng kiểm tra thông tin và thử lại.',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _resetting = false);
+      }
+    }
+  }
+
+  String? _emailError(String value) {
+    final email = value.trim();
+    if (email.isEmpty) {
+      return 'Vui lòng nhập email';
+    }
+    if (!email.contains('@')) {
+      return 'Email không hợp lệ';
+    }
+    return null;
+  }
+
+  String? _resetValidationMessage() {
+    final emailError = _emailError(_emailCtrl.text);
+    if (emailError != null) {
+      return emailError;
+    }
+    if (_tokenCtrl.text.trim().isEmpty) {
+      return 'Vui lòng nhập mã đặt lại mật khẩu';
+    }
+    if (_newPasswordCtrl.text.isEmpty) {
+      return 'Vui lòng nhập mật khẩu mới';
+    }
+    if (_newPasswordCtrl.text.length < 8) {
+      return 'Mật khẩu mới phải có ít nhất 8 ký tự';
+    }
+    final strongPassword = RegExp(
+      r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).+$',
+    ).hasMatch(_newPasswordCtrl.text);
+    if (!strongPassword) {
+      return 'Mật khẩu mới cần có chữ hoa, chữ thường, số và ký tự đặc biệt';
+    }
+    if (_newPasswordCtrl.text != _confirmPasswordCtrl.text) {
+      return 'Mật khẩu xác nhận không khớp';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 430,
+        constraints: const BoxConstraints(maxWidth: 430),
+        padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF064E3B),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.22),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 26,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Quên mật khẩu',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Đóng',
+                    onPressed: _requesting || _resetting
+                        ? null
+                        : () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _GlassField(
+                controller: _emailCtrl,
+                label: 'Email',
+                hint: 'you@example.com',
+                icon: Icons.email_outlined,
+                keyboardType: TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 14),
+              _PrimaryButton(
+                label: 'Gửi mã đặt lại',
+                loading: _requesting,
+                onTap: _requestResetToken,
+              ),
+              if (_tokenRequested) ...[
+                const SizedBox(height: 18),
+                _GlassField(
+                  controller: _tokenCtrl,
+                  label: 'Mã đặt lại mật khẩu',
+                  hint: 'Nhập mã trong email',
+                  icon: Icons.pin_outlined,
+                ),
+                const SizedBox(height: 12),
+                _GlassField(
+                  controller: _newPasswordCtrl,
+                  label: 'Mật khẩu mới',
+                  hint: '••••••••',
+                  icon: Icons.lock_reset_outlined,
+                  obscureText: _obscureNewPassword,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureNewPassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureNewPassword = !_obscureNewPassword,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _GlassField(
+                  controller: _confirmPasswordCtrl,
+                  label: 'Xác nhận mật khẩu',
+                  hint: '••••••••',
+                  icon: Icons.lock_outline,
+                  obscureText: _obscureConfirmPassword,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureConfirmPassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureConfirmPassword = !_obscureConfirmPassword,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _PrimaryButton(
+                  label: 'Đặt lại mật khẩu',
+                  loading: _resetting,
+                  onTap: _resetPassword,
+                ),
+              ],
+              if (_statusMessage != null) ...[
+                const SizedBox(height: 14),
+                Text(
+                  _statusMessage!,
+                  style: const TextStyle(
+                    color: Color(0xFFFDE68A),
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _GlassField extends StatelessWidget {
   final TextEditingController controller;
