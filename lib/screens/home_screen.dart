@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'map_screen.dart';
+import '../services/auth_api.dart';
+import '../services/match_api.dart';
 
 // ─── Enums & Models ──────────────────────────────────────────────────────────
 
@@ -72,19 +74,25 @@ IconData _tierIcon(PlayerTier t) {
 
 // ─── Static Data ─────────────────────────────────────────────────────────────
 
+/// Converts a backend tier string to a [PlayerTier] enum value.
+PlayerTier _tierFromString(String tier) {
+  switch (tier.toLowerCase()) {
+    case 'silver':   return PlayerTier.silver;
+    case 'gold':     return PlayerTier.gold;
+    case 'platinum': return PlayerTier.platinum;
+    case 'diamond':  return PlayerTier.diamond;
+    default:         return PlayerTier.bronze;
+  }
+}
+
+/// Builds the initial players list.
+/// Slot 0 is always null initially; it will be filled with real data once
+/// the backend call completes (or left null for guests).
 List<_Player?> _makeInitialPlayers(int size) {
   if (size == 2) {
-    return [
-      const _Player(id: 1, name: 'Minh Tú', avatar: 'MT', rating: 4.2, tier: PlayerTier.gold, isCurrentUser: true),
-      null,
-    ];
+    return [null, null];
   }
-  return [
-    const _Player(id: 1, name: 'Minh Tú', avatar: 'MT', rating: 4.2, tier: PlayerTier.gold, isCurrentUser: true),
-    const _Player(id: 2, name: 'Lan Anh', avatar: 'LA', rating: 3.8, tier: PlayerTier.silver),
-    null,
-    null,
-  ];
+  return [null, null, null, null];
 }
 
 const _adPosts = [
@@ -97,26 +105,61 @@ const _adPosts = [
 
 class HomeScreen extends StatefulWidget {
   final bool isDarkMode;
-  const HomeScreen({super.key, required this.isDarkMode});
+  final AuthSession? authSession;
+  const HomeScreen({super.key, required this.isDarkMode, this.authSession});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _locationLabel = 'Hà Nội';
+  final String _locationLabel = 'Hà Nội';
   String _locationDistance = '3km';
   bool _searching = false;
   int _lobbySize = 4;
-  double _availableHours = 2.0;
-  double _startHour = 8.0; // 0‒22 (start of queue window)
+  double _availableHours = 3.0;
+  double _startHour = 8.0;
   late List<_Player?> _players;
   Timer? _searchTimer;
+  bool _loadingMe = false; // true while fetching lobby-me
+  String? _activeQueueId;  // set once createLobby succeeds
+
+  /// Venue IDs returned by MapScreen — sent to matchmaking as PrefferedVenue.
+  List<int> _selectedVenueIds = [];
+
 
   @override
   void initState() {
     super.initState();
     _players = _makeInitialPlayers(_lobbySize);
+    _fetchMe();
+  }
+
+  /// Fetches the real user's lobby card and populates slot 0.
+  Future<void> _fetchMe() async {
+    final token = widget.authSession?.token;
+    if (token == null) return;
+
+    setState(() => _loadingMe = true);
+    try {
+      final data = await AuthApi().lobbyMe(token);
+      if (!mounted) return;
+      final player = _Player(
+        id: data.userId,
+        name: data.username,
+        avatar: data.avatarInitials,
+        rating: data.skillLevel,
+        tier: _tierFromString(data.tier),
+        isCurrentUser: true,
+      );
+      setState(() {
+        _players = List.from(_players)..[0] = player;
+      });
+    } catch (_) {
+      // Silently ignore — slot 0 stays empty if the call fails
+    } finally {
+      if (mounted) setState(() => _loadingMe = false);
+    }
   }
 
   @override
@@ -132,36 +175,150 @@ class _HomeScreenState extends State<HomeScreen> {
       _searching = false;
       _players = _makeInitialPlayers(size);
     });
+    _fetchMe(); // re-populate slot 0 with the real user
   }
 
-  void _findMatch() {
-    setState(() => _searching = true);
-    _searchTimer = Timer(const Duration(milliseconds: 2500), () {
-      if (!mounted) return;
-      setState(() {
-        final idx = _players.indexWhere((p) => p == null);
-        if (idx != -1) {
-          _players = List.from(_players);
-          _players[idx] = const _Player(id: 99, name: 'Quang Hải', avatar: 'QH', rating: 4.5, tier: PlayerTier.platinum);
-        }
-        _searching = false;
-      });
+  /// Formats a start‐hour double (e.g. 8.5) as an HH:mm:ss string.
+  String _hourToTimeString(double h) {
+    final hh = h.toInt().toString().padLeft(2, '0');
+    final mm = ((h % 1) * 60).toInt().toString().padLeft(2, '0');
+    return '$hh:$mm:00';
+  }
+
+  /// Kicks off real matchmaking via the FindMatchModule (port 5063):
+  ///  1. POST /api/match/enqueue  → 202 Accepted with queueId
+  ///  2. Every 10 s: GET /api/match/{queueId}
+  ///     • 200 OK  → matched, show popup
+  ///     • 202     → still waiting, keep polling
+  Future<void> _findMatch() async {
+    final token = widget.authSession?.token;
+    if (token == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bạn cần đăng nhập để tìm trận.')),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _searching = true;
+      _activeQueueId = null;
     });
+
+    try {
+      // ── Step 1: fetch current user's player data ─────────────────────────
+      final me = await AuthApi().lobbyMe(token);
+      if (!mounted) return;
+
+      final endHour = (_startHour + _availableHours).clamp(0.0, 24.0);
+
+      // Build the players array — one entry for the current user
+      final myPlayer = LobbyPlayerDto(
+        playerId:   me.userId,
+        playerName: me.username,
+        playerSkill: me.skillLevel,
+        playerProfilePictureUrl: me.profileImageUrl,
+        preferredTimeStart: _hourToTimeString(_startHour),
+        preferredTimeEnd:   _hourToTimeString(endHour),
+        prefferedVenue:     _selectedVenueIds,
+      );
+
+      final req = CreateLobbyRequest(
+        players:   [myPlayer],
+        lobbyType: 'normal',
+        lobbySize: _lobbySize,
+      );
+
+      // ── Step 2: enqueue on FindMatchModule (port 5063) ───────────────────
+      final enqueued = await MatchApi().enqueue(req);
+      if (!mounted) return;
+
+      setState(() => _activeQueueId = enqueued.queueId);
+
+      // ── Step 3: poll every 10 s ──────────────────────────────────────────
+      _searchTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+        if (!mounted) return;
+        final queueId = _activeQueueId;
+        if (queueId == null) return;
+
+        try {
+          final status = await MatchApi().getMatch(queueId);
+          if (!mounted) return;
+
+          if (status.isMatched) {
+            _searchTimer?.cancel();
+            setState(() {
+              _searching = false;
+              _activeQueueId = null;
+            });
+            _showMatchFoundPopup(status);
+          }
+        } catch (_) {
+          // Silently retry on next tick
+        }
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _searching = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi: ${e.message}'), backgroundColor: const Color(0xFFEF4444)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _searching = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi kết nối: $e'), backgroundColor: const Color(0xFFEF4444)),
+      );
+    }
+  }
+
+  /// Shows the premium match-detail bottom sheet when a match is found.
+  void _showMatchFoundPopup(LobbyStatusResponse match) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _MatchFoundPopup(
+        dark: widget.isDarkMode,
+        match: match,
+        onAccept: () {
+          Navigator.of(context).pop();
+          // TODO: navigate to match detail / booking screen
+        },
+        onDecline: () {
+          Navigator.of(context).pop();
+          _leaveSearch();
+        },
+      ),
+    );
   }
 
   void _leaveSearch() {
     _searchTimer?.cancel();
-    setState(() { _searching = false; _players = _makeInitialPlayers(_lobbySize); });
+    setState(() {
+      _searching = false;
+      _activeQueueId = null;
+      _players = _makeInitialPlayers(_lobbySize);
+    });
+    _fetchMe(); // restore slot 0
   }
 
   int get _filled => _players.where((p) => p != null).length;
 
-  void _openMapScreen() {
-    Navigator.of(context).push(
+  void _openMapScreen() async {
+    final result = await Navigator.of(context).push<List<int>>(
       MaterialPageRoute(
         builder: (_) => MapScreen(isDarkMode: widget.isDarkMode),
       ),
     );
+    if (result != null && result.isNotEmpty && mounted) {
+      setState(() {
+        _selectedVenueIds = result;
+        // Update the location badge to reflect venue count
+        _locationDistance = '${result.length} sân';
+      });
+    }
   }
 
   @override
@@ -180,6 +337,7 @@ class _HomeScreenState extends State<HomeScreen> {
             players: _players,
             filled: _filled,
             searching: _searching,
+            loadingMe: _loadingMe,
             lobbySize: _lobbySize,
             availableHours: _availableHours,
             startHour: _startHour,
@@ -265,6 +423,7 @@ class _LobbySection extends StatelessWidget {
   final List<_Player?> players;
   final int filled;
   final bool searching;
+  final bool loadingMe;
   final int lobbySize;
   final double availableHours;
   final double startHour;
@@ -279,6 +438,7 @@ class _LobbySection extends StatelessWidget {
     required this.players,
     required this.filled,
     required this.searching,
+    required this.loadingMe,
     required this.lobbySize,
     required this.availableHours,
     required this.startHour,
@@ -298,7 +458,7 @@ class _LobbySection extends StatelessWidget {
         decoration: BoxDecoration(
           gradient: const LinearGradient(colors: [Color(0xFF22C55E), Color(0xFF16A34A)]),
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [const BoxShadow(color: Color(0x3322C55E), blurRadius: 8, offset: Offset(0, 2))],
+          boxShadow: const [BoxShadow(color: Color(0x3322C55E), blurRadius: 8, offset: Offset(0, 2))],
         ),
         child: const Text('── VS ──', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1)),
       ),
@@ -369,7 +529,13 @@ class _LobbySection extends StatelessWidget {
             childAspectRatio: slotAspect,
             children: List.generate(
               lobbySize == 2 ? 1 : 2,
-              (i) => _PlayerSlot(player: players[i], index: i, dark: dark, isWeb: isWide),
+              (i) => _PlayerSlot(
+                player: players[i],
+                index: i,
+                dark: dark,
+                isWeb: isWide,
+                shimmer: i == 0 && loadingMe,
+              ),
             ),
           ),
           const SizedBox(height: 14),
@@ -515,25 +681,97 @@ class _SearchingBadgeState extends State<_SearchingBadge> with SingleTickerProvi
 
 // ─── Player Slot ─────────────────────────────────────────────────────────────
 
-class _PlayerSlot extends StatelessWidget {
+class _PlayerSlot extends StatefulWidget {
   final _Player? player;
   final int index;
   final bool dark;
   final bool isWeb;
-  const _PlayerSlot({required this.player, required this.index, required this.dark, this.isWeb = false});
+  final bool shimmer;
+  const _PlayerSlot({
+    required this.player,
+    required this.index,
+    required this.dark,
+    this.isWeb = false,
+    this.shimmer = false,
+  });
+
+  @override
+  State<_PlayerSlot> createState() => _PlayerSlotState();
+}
+
+class _PlayerSlotState extends State<_PlayerSlot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shimCtrl;
+  late final Animation<double> _shimAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _shimAnim = CurvedAnimation(parent: _shimCtrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _shimCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.shimmer) {
+      return AnimatedBuilder(
+        animation: _shimAnim,
+        builder: (_, __) => Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            color: Color.lerp(
+              widget.dark ? const Color(0xFF374151) : const Color(0xFFF3F4F6),
+              widget.dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
+              _shimAnim.value,
+            ),
+            border: Border.all(
+              color: widget.dark ? const Color(0xFF4B5563) : const Color(0xFFD1D5DB),
+              width: 2,
+            ),
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Container(
+              width: widget.isWeb ? 34 : 52,
+              height: widget.isWeb ? 34 : 52,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: widget.dark ? const Color(0xFF4B5563) : const Color(0xFFD1D5DB),
+              ),
+            ),
+            SizedBox(height: widget.isWeb ? 3 : 6),
+            Container(
+              width: 60, height: 8,
+              decoration: BoxDecoration(
+                color: widget.dark ? const Color(0xFF4B5563) : const Color(0xFFD1D5DB),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ]),
+        ),
+      );
+    }
     // Use smaller avatar/font sizes on wide (web) screens
-    final double avatarSize = isWeb ? 34 : 52;
-    final double plusSize   = isWeb ? 14 : 22;
-    final double nameFontSize  = isWeb ? 9  : 10;
-    final double tierFontSize  = isWeb ? 7  : 8;
-    final double ratingFontSize = isWeb ? 8 : 9;
-    final double tierIconSize  = isWeb ? 7  : 9;
-    final double starSize      = isWeb ? 7  : 9;
+    final bool dark   = widget.dark;
+    final bool isWeb  = widget.isWeb;
+    final double avatarSize     = isWeb ? 34 : 52;
+    final double plusSize       = isWeb ? 14 : 22;
+    final double nameFontSize   = isWeb ? 9  : 10;
+    final double tierFontSize   = isWeb ? 7  : 8;
+    final double ratingFontSize = isWeb ? 8  : 9;
+    final double tierIconSize   = isWeb ? 7  : 9;
+    final double starSize       = isWeb ? 7  : 9;
 
-    if (player == null) {
+    // ─── Empty slot ────────────────────────────────────────────────
+    if (widget.player == null) {
       return Container(
         decoration: BoxDecoration(
           color: dark ? const Color(0xFF374151).withValues(alpha: 0.5) : const Color(0xFFF3F4F6).withValues(alpha: 0.8),
@@ -552,21 +790,25 @@ class _PlayerSlot extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(color: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(10)),
-            child: Text('Slot ${index + 1}', style: TextStyle(fontSize: 9, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+            child: Text('Slot ${widget.index + 1}', style: TextStyle(fontSize: 9, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
           ),
         ]),
       );
     }
 
-    final p = player!;
+    // ─── Filled slot ───────────────────────────────────────────────
+    final p    = widget.player!;
     final grad = _tierGradient(p.tier);
-    final tc = _tierTextColor(p.tier);
+    final tc   = _tierTextColor(p.tier);
 
     return Container(
       decoration: BoxDecoration(
         color: dark ? const Color(0xFF374151) : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: p.isCurrentUser ? const Color(0xFF4ADE80) : dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB), width: p.isCurrentUser ? 2 : 1),
+        border: Border.all(
+          color: p.isCurrentUser ? const Color(0xFF4ADE80) : dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
+          width: p.isCurrentUser ? 2 : 1,
+        ),
         boxShadow: p.isCurrentUser ? [const BoxShadow(color: Color(0x4D4ADE80), blurRadius: 12)] : null,
       ),
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -577,12 +819,14 @@ class _PlayerSlot extends StatelessWidget {
             child: Center(child: Text(p.avatar, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: isWeb ? 10 : 15))),
           ),
           if (p.isCurrentUser)
-            Positioned(top: -4, right: -4,
+            Positioned(
+              top: -4, right: -4,
               child: Container(
                 width: isWeb ? 13 : 18, height: isWeb ? 13 : 18,
                 decoration: BoxDecoration(color: const Color(0xFF22C55E), shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
                 child: Center(child: Text('Y', style: TextStyle(color: Colors.white, fontSize: isWeb ? 5 : 7, fontWeight: FontWeight.bold))),
-              )),
+              ),
+            ),
         ]),
         SizedBox(height: isWeb ? 3 : 5),
         Text(p.name, style: TextStyle(fontSize: nameFontSize, fontWeight: FontWeight.w600, color: dark ? Colors.white : const Color(0xFF111827))),
@@ -895,22 +1139,23 @@ class _TimeAvailabilitySlider extends StatelessWidget {
   });
 
   String _qualityLabel(double h) {
-    if (h < 3) return 'Tối thiểu';
-    if (h < 5) return 'Tốt';
-    if (h < 7) return 'Rất tốt';
+    if (h < 4.5) return 'Tối thiểu';
+    if (h < 6) return 'Tốt';
+    if (h < 7.5) return 'Rất tốt';
     return 'Xuất sắc ✨';
   }
 
   Color _qualityColor(double h) {
-    if (h < 3) return const Color(0xFFEF4444);
-    if (h < 5) return const Color(0xFFF59E0B);
-    if (h < 7) return const Color(0xFF84CC16);
+    if (h < 4.5) return const Color(0xFFEF4444);
+    if (h < 6) return const Color(0xFFF59E0B);
+    if (h < 7.5) return const Color(0xFF84CC16);
     return const Color(0xFF22C55E);
   }
 
   String _formatHour(double h) {
     final hh = h.toInt().toString().padLeft(2, '0');
-    return '$hh:00';
+    final mm = ((h % 1) * 60).round() == 30 ? '30' : '00';
+    return '$hh:$mm';
   }
 
   @override
@@ -994,9 +1239,9 @@ class _TimeAvailabilitySlider extends StatelessWidget {
                     ),
                     child: Slider(
                       value: hours,
-                      min: 1.0,
+                      min: 3.0,
                       max: 8.0,
-                      divisions: 14,
+                      divisions: 10, // 0.5h steps from 3.0 to 8.0
                       onChanged: onHoursChanged,
                     ),
                   ),
@@ -1126,6 +1371,377 @@ class _TimeAvailabilitySlider extends StatelessWidget {
           ]),
         ],
       ),
+    );
+  }
+}
+
+// ─── Match Found Popup ───────────────────────────────────────────────────────
+
+class _MatchFoundPopup extends StatefulWidget {
+  final bool dark;
+  final LobbyStatusResponse match;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  const _MatchFoundPopup({
+    required this.dark,
+    required this.match,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  @override
+  State<_MatchFoundPopup> createState() => _MatchFoundPopupState();
+}
+
+class _MatchFoundPopupState extends State<_MatchFoundPopup>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scaleAnim;
+  late final Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 550),
+    )..forward();
+    _scaleAnim = CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut);
+    _fadeAnim  = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  // Split players into two teams of lobbySize/2
+  List<List<LobbyPlayerDto>> _teams() {
+    final players = widget.match.players;
+    final half = (widget.match.lobbySize / 2).ceil();
+    if (players.isEmpty) return [[], []];
+    final a = players.take(half).toList();
+    final b = players.skip(half).toList();
+    return [a, b];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark  = widget.dark;
+    final teams = _teams();
+    final bg    = dark ? const Color(0xFF111827) : Colors.white;
+    final border= dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB);
+
+    return FadeTransition(
+      opacity: _fadeAnim,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: border),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF22C55E).withValues(alpha: 0.18),
+              blurRadius: 40,
+              offset: const Offset(0, -8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── Drag handle
+            const SizedBox(height: 10),
+            Container(
+              width: 38, height: 4,
+              decoration: BoxDecoration(
+                color: dark ? const Color(0xFF4B5563) : const Color(0xFFD1D5DB),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(height: 18),
+
+            // ── Trophy + headline
+            ScaleTransition(
+              scale: _scaleAnim,
+              child: Column(children: [
+                Container(
+                  width: 64, height: 64,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF22C55E), Color(0xFF059669)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(color: Color(0x6622C55E), blurRadius: 20, offset: Offset(0, 6)),
+                    ],
+                  ),
+                  child: const Center(child: Text('🏆', style: TextStyle(fontSize: 30))),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Trận đấu đã tìm được!',
+                  style: TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.w900,
+                    color: dark ? Colors.white : const Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  widget.match.lobbyType == 'ranked'
+                      ? '🏅 Trận xếp hạng • ${widget.match.lobbySize} người'
+                      : '🏓 Trận thường • ${widget.match.lobbySize} người',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 22),
+
+            // ── Teams
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Team A
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _teamLabel('Nhóm A', const Color(0xFF22C55E), dark),
+                        const SizedBox(height: 8),
+                        ...teams[0].map((p) => _MatchPlayerCard(player: p, dark: dark, accentColor: const Color(0xFF22C55E))),
+                        if (teams[0].isEmpty)
+                          _emptySlot(dark),
+                      ],
+                    ),
+                  ),
+                  // VS divider
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
+                        borderRadius: BorderRadius.all(Radius.circular(12)),
+                      ),
+                      child: const Text(
+                        'VS',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                  // Team B
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _teamLabel('Nhóm B', const Color(0xFF6366F1), dark),
+                        const SizedBox(height: 8),
+                        ...teams[1].map((p) => _MatchPlayerCard(player: p, dark: dark, accentColor: const Color(0xFF6366F1))),
+                        if (teams[1].isEmpty)
+                          _emptySlot(dark),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // ── Match time info
+            if (widget.match.matchedAt != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: dark ? const Color(0xFF1F2937) : const Color(0xFFF0FDF4),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: dark ? const Color(0xFF374151) : const Color(0xFFBBF7D0)),
+                  ),
+                  child: Row(children: [
+                    const Text('⏰', style: TextStyle(fontSize: 16)),
+                    const SizedBox(width: 8),
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Thời điểm khớp',
+                        style: TextStyle(fontSize: 10, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280))),
+                      Text(
+                        _formatMatchedAt(widget.match.matchedAt!),
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold,
+                            color: dark ? Colors.white : const Color(0xFF111827)),
+                      ),
+                    ]),
+                  ]),
+                ),
+              ),
+            const SizedBox(height: 20),
+
+            // ── Action buttons
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: widget.onDecline,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFFF87171), width: 2),
+                      foregroundColor: const Color(0xFFEF4444),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: const Text('❌ Từ chối', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton(
+                    onPressed: widget.onAccept,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF22C55E),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      elevation: 4,
+                      shadowColor: const Color(0x6622C55E),
+                    ),
+                    child: const Text('✅ Chấp nhận', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _teamLabel(String label, Color color, bool dark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+    );
+  }
+
+  Widget _emptySlot(bool dark) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      height: 58,
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF374151).withValues(alpha: 0.4) : const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB)),
+      ),
+      child: const Center(child: Text('?', style: TextStyle(fontSize: 20, color: Color(0xFF9CA3AF)))),
+    );
+  }
+
+  String _formatMatchedAt(DateTime dt) {
+    final local = dt.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final mo= local.month.toString().padLeft(2, '0');
+    return '$h:$m, $d/$mo/${local.year}';
+  }
+}
+
+// ─── Match Player Card ────────────────────────────────────────────────────────
+
+class _MatchPlayerCard extends StatelessWidget {
+  final LobbyPlayerDto player;
+  final bool dark;
+  final Color accentColor;
+
+  const _MatchPlayerCard({
+    required this.player,
+    required this.dark,
+    required this.accentColor,
+  });
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'[\s_.]'));
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.length >= 2 ? name.substring(0, 2).toUpperCase() : name.toUpperCase();
+  }
+
+  /// Maps a raw skill score (0–5+) to a star rating display (1.0–5.0).
+  double _skillToStars(double skill) =>
+      (skill / 5.0 * 4.0 + 1.0).clamp(1.0, 5.0);
+
+  @override
+  Widget build(BuildContext context) {
+    final stars = _skillToStars(player.playerSkill);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1F2937) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accentColor.withValues(alpha: 0.35), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: accentColor.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(children: [
+        // Avatar circle
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [accentColor, accentColor.withValues(alpha: 0.6)],
+            ),
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              _initials(player.playerName),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Name + skill
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              player.playerName,
+              style: TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w700,
+                color: dark ? Colors.white : const Color(0xFF111827),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Row(children: [
+              const Icon(Icons.star, size: 9, color: Color(0xFFFACC15)),
+              const SizedBox(width: 2),
+              Text(
+                stars.toStringAsFixed(1),
+                style: TextStyle(fontSize: 9, color: dark ? const Color(0xFFD1D5DB) : const Color(0xFF4B5563)),
+              ),
+            ]),
+          ]),
+        ),
+      ]),
     );
   }
 }

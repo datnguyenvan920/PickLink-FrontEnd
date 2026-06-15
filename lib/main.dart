@@ -5,6 +5,7 @@ import 'screens/rank_screen.dart';
 import 'screens/social_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/profile_setup_screen.dart';
 import 'services/auth_api.dart';
 import 'theme/app_theme.dart';
 
@@ -22,13 +23,47 @@ class PickleMatchApp extends StatefulWidget {
 class _PickleMatchAppState extends State<PickleMatchApp> {
   bool _isDarkMode = false;
   int _activeTab = 2; // Start on Play (centre)
-  bool _authed = false; // false = show auth screen first
+
+  // null  = show auth screen
+  // false = show profile setup
+  // true  = show main app
+  bool? _authed;
+  bool _needsSetup = false;
   AuthSession? _authSession;
 
-  void _onAuthSuccess(AuthSession? session) {
+  void _onAuthSuccess(AuthSession? session) async {
+    if (session == null) {
+      // Skipped auth → go straight to main app
+      setState(() {
+        _authSession = null;
+        _authed = true;
+        _needsSetup = false;
+      });
+      return;
+    }
+
+    // Real login / register → check role assignment
+    bool needsSetup = true; // default: show setup
+    try {
+      final api = AuthApi();
+      final status = await api.roleStatus(session.token);
+      needsSetup = !status.hasRole; // skip setup if role already exists
+    } catch (_) {
+      // If the check fails, be safe and show setup
+    }
+
     setState(() {
       _authSession = session;
+      _authed = needsSetup ? false : true;
+      _needsSetup = needsSetup;
+    });
+  }
+
+  void _onSetupComplete(ProfileSetupResult result) {
+    // TODO: send result (role, skillLevel, affiliationCode) to backend
+    setState(() {
       _authed = true;
+      _needsSetup = false;
     });
   }
 
@@ -40,15 +75,20 @@ class _PickleMatchAppState extends State<PickleMatchApp> {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: _isDarkMode ? ThemeMode.dark : ThemeMode.light,
-      home: _authed
-          ? _RootScaffold(
-              isDarkMode: _isDarkMode,
-              activeTab: _activeTab,
-              authSession: _authSession,
-              onTabChanged: (i) => setState(() => _activeTab = i),
-              onDarkModeChanged: (v) => setState(() => _isDarkMode = v),
-            )
-          : AuthScreen(onAuthSuccess: _onAuthSuccess),
+      home: _authed == null
+          ? AuthScreen(onAuthSuccess: _onAuthSuccess)
+          : (_needsSetup
+              ? ProfileSetupScreen(
+                  authSession: _authSession,
+                  onComplete: _onSetupComplete,
+                )
+              : _RootScaffold(
+                  isDarkMode: _isDarkMode,
+                  activeTab: _activeTab,
+                  authSession: _authSession,
+                  onTabChanged: (i) => setState(() => _activeTab = i),
+                  onDarkModeChanged: (v) => setState(() => _isDarkMode = v),
+                )),
     );
   }
 }
@@ -77,7 +117,7 @@ class _RootScaffold extends StatelessWidget {
       case 1:
         return SocialScreen(isDarkMode: isDarkMode);
       case 2:
-        return HomeScreen(isDarkMode: isDarkMode);
+        return HomeScreen(isDarkMode: isDarkMode, authSession: authSession);
       case 3:
         return MapScreen(isDarkMode: isDarkMode);
       case 4:

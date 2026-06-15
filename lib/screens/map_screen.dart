@@ -5,25 +5,44 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
+import '../services/auth_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Model
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _Venue {
-  final String id;
+  final int id;        // DB primary key (VenueId) — sent to matchmaking
   final String name;
-  final String type;
   final String address;
   final LatLng latLng;
+  final double rating;
+  final String openTime;
+  final String closeTime;
+  final double distanceKm;
 
   const _Venue({
     required this.id,
     required this.name,
-    required this.type,
     required this.address,
     required this.latLng,
+    required this.rating,
+    required this.openTime,
+    required this.closeTime,
+    required this.distanceKm,
   });
+
+  /// Build from backend VenueDto.
+  factory _Venue.fromDto(VenueDto dto) => _Venue(
+        id:          dto.venueId,
+        name:        dto.venueName,
+        address:     dto.address,
+        latLng:      LatLng(dto.latitude, dto.longitude),
+        rating:      dto.overallRating,
+        openTime:    dto.openTime,
+        closeTime:   dto.closeTime,
+        distanceKm:  dto.distanceKm,
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,7 +137,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     } catch (_) {}
   }
 
-  // ── Overpass API for sports venues ────────────────────────────────────────
+  // ── Backend venue fetch ───────────────────────────────────────────────────
   void _onRadiusChanged(double v) {
     setState(() => _radiusKm = v);
     _debounce?.cancel();
@@ -129,73 +148,21 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     setState(() => _loadingVenues = true);
 
-    final lat = _center.latitude;
-    final lon = _center.longitude;
-    final radiusM = (_radiusKm * 1000).round();
-
-    // Overpass QL — sports venues / leisure pitches within radius
-    final query = '''
-[out:json][timeout:25];
-(
-  node["sport"~"tennis|badminton|basketball|volleyball|soccer|football|pickleball"](around:$radiusM,$lat,$lon);
-  way["sport"~"tennis|badminton|basketball|volleyball|soccer|football|pickleball"](around:$radiusM,$lat,$lon);
-  node["leisure"="sports_centre"](around:$radiusM,$lat,$lon);
-  node["leisure"="pitch"](around:$radiusM,$lat,$lon);
-);
-out center 40;
-''';
-
     try {
-      final uri = Uri.parse('https://overpass-api.de/api/interpreter');
-      final res = await http.post(
-        uri,
-        body: query,
-        headers: {'User-Agent': 'PickleMatch/1.0'},
+      final venues = await AuthApi().fetchNearbyVenues(
+        lat: _center.latitude,
+        lng: _center.longitude,
+        radiusKm: _radiusKm,
       );
       if (!mounted) return;
-
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final elements = (data['elements'] as List<dynamic>? ?? []);
-
-        final venues = <_Venue>[];
-        for (final el in elements) {
-          final tags = el['tags'] as Map<String, dynamic>? ?? {};
-          final name = (tags['name'] as String?)?.trim() ?? '';
-          if (name.isEmpty) continue;
-
-          double? elLat, elLon;
-          if (el['type'] == 'node') {
-            elLat = (el['lat'] as num?)?.toDouble();
-            elLon = (el['lon'] as num?)?.toDouble();
-          } else if (el['center'] != null) {
-            elLat = (el['center']['lat'] as num?)?.toDouble();
-            elLon = (el['center']['lon'] as num?)?.toDouble();
-          }
-          if (elLat == null || elLon == null) continue;
-
-          final sport = (tags['sport'] as String? ?? tags['leisure'] as String? ?? 'Sports').trim();
-          final addr = [
-            tags['addr:street'],
-            tags['addr:housenumber'],
-            tags['addr:city'],
-          ].whereType<String>().join(', ');
-
-          venues.add(_Venue(
-            id: '${el['id']}',
-            name: name,
-            type: _capitalise(sport.split(';').first.trim()),
-            address: addr.isEmpty ? 'Xem trên bản đồ' : addr,
-            latLng: LatLng(elLat, elLon),
-          ));
-        }
-        setState(() {
-          _venues = venues;
-          _loadingVenues = false;
-        });
-        return;
-      }
-    } catch (_) {}
+      setState(() {
+        _venues = venues.map(_Venue.fromDto).toList();
+        _loadingVenues = false;
+      });
+      return;
+    } catch (_) {
+      // Fallback to mock data when backend is unreachable
+    }
 
     // Fallback: mock venues scattered around center
     if (mounted) {
@@ -206,55 +173,45 @@ out center 40;
     }
   }
 
-  String _capitalise(String s) =>
-      s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1).toLowerCase()}';
-
-  // ── Mock data fallback ────────────────────────────────────────────────────
+  // ── Mock data fallback (when backend is unreachable) ─────────────────────
   static List<_Venue> _mockVenues(LatLng center, double radiusKm) {
     final rng = math.Random(42);
-    final names = [
-      ('Central Pickleball Arena', 'Pickleball'),
-      ('Victory Sports Complex', 'Badminton'),
-      ('Riverside Park Court', 'Tennis'),
-      ('Skyline Basketball Club', 'Basketball'),
-      ('Elite Multi-Sport Center', 'Multi-Sport'),
-      ('Green Zone Pitch', 'Football'),
-      ('Urban Racket Club', 'Pickleball'),
-      ('Metro Sports Hub', 'Badminton'),
+    const names = [
+      'Hoan Kiem Pickleball Club',
+      'Lake View Sports Center',
+      'Old Quarter Courts',
+      'Ba Dinh Grand Arena',
+      'West Lake Pickleball Hub',
+      'Dong Da Racket Club',
+      'Van Mieu Courts',
+      'Thong Nhat Park Pickleball',
     ];
     return List.generate(names.length, (i) {
       final angleDeg = rng.nextDouble() * 360;
       final dist = rng.nextDouble() * radiusKm * 0.9;
       final dLat = dist / 111.0 * math.cos(angleDeg * math.pi / 180);
-      final dLon = dist / (111.0 * math.cos(center.latitude * math.pi / 180)) *
+      final dLon = dist /
+          (111.0 * math.cos(center.latitude * math.pi / 180)) *
           math.sin(angleDeg * math.pi / 180);
       return _Venue(
-        id: 'mock_$i',
-        name: names[i].$1,
-        type: names[i].$2,
+        id: -(i + 1), // negative IDs indicate mock fallback
+        name: names[i],
         address: 'Gần trung tâm • ${dist.toStringAsFixed(1)} km',
         latLng: LatLng(center.latitude + dLat, center.longitude + dLon),
+        rating: 4.0 + rng.nextDouble(),
+        openTime: '06:00',
+        closeTime: '22:00',
+        distanceKm: dist,
       );
     });
   }
 
   // ── Color helpers ─────────────────────────────────────────────────────────
-  Color _typeColor(String type) {
-    switch (type.toLowerCase()) {
-      case 'football':
-      case 'soccer':
-        return const Color(0xFF22C55E);
-      case 'badminton':
-        return const Color(0xFF3B82F6);
-      case 'tennis':
-        return const Color(0xFFF59E0B);
-      case 'basketball':
-        return const Color(0xFFEF4444);
-      case 'pickleball':
-        return const Color(0xFF8B5CF6);
-      default:
-        return const Color(0xFF06B6D4);
-    }
+  Color _venueColor(double rating) {
+    if (rating >= 4.5) return const Color(0xFF22C55E);
+    if (rating >= 4.0) return const Color(0xFF3B82F6);
+    if (rating >= 3.5) return const Color(0xFFF59E0B);
+    return const Color(0xFF06B6D4);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -357,11 +314,17 @@ out center 40;
               venues: _venues,
               loading: _loadingVenues,
               selectedVenue: _selectedVenue,
-              typeColor: _typeColor,
+              venueColor: _venueColor,
               onVenueTap: (v) {
                 setState(() => _selectedVenue = v);
                 _mapController.move(v.latLng, 16);
               },
+              onConfirm: _venues.isEmpty
+                  ? null
+                  : () {
+                      final ids = _venues.map((v) => v.id).toList();
+                      Navigator.of(context).pop(ids);
+                    },
             ),
           ),
         ],
@@ -429,7 +392,7 @@ out center 40;
         // ── Venue markers ──────────────────────────────────────────────
         MarkerLayer(
           markers: _venues.map((v) {
-            final color = _typeColor(v.type);
+            final color = _venueColor(v.rating);
             final isSelected = _selectedVenue?.id == v.id;
             return Marker(
               point: v.latLng,
@@ -455,7 +418,7 @@ out center 40;
                   ),
                   child: Center(
                     child: Icon(
-                      _venueIcon(v.type),
+                      Icons.stadium,
                       color: Colors.white,
                       size: isSelected ? 22 : 16,
                     ),
@@ -510,24 +473,6 @@ out center 40;
         ),
       ],
     );
-  }
-
-  IconData _venueIcon(String type) {
-    switch (type.toLowerCase()) {
-      case 'pickleball':
-        return Icons.sports_tennis;
-      case 'badminton':
-        return Icons.sports_tennis;
-      case 'tennis':
-        return Icons.sports_tennis;
-      case 'basketball':
-        return Icons.sports_basketball;
-      case 'football':
-      case 'soccer':
-        return Icons.sports_soccer;
-      default:
-        return Icons.stadium;
-    }
   }
 }
 
@@ -596,7 +541,7 @@ class _GlassButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bottom Panel (radius slider + venue list)
+// Bottom Panel (radius slider + venue list + confirm button)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _BottomPanel extends StatefulWidget {
@@ -610,8 +555,9 @@ class _BottomPanel extends StatefulWidget {
   final List<_Venue> venues;
   final bool loading;
   final _Venue? selectedVenue;
-  final Color Function(String) typeColor;
+  final Color Function(double) venueColor;  // rating → color
   final ValueChanged<_Venue> onVenueTap;
+  final VoidCallback? onConfirm;            // null = button disabled
 
   const _BottomPanel({
     required this.dark,
@@ -624,8 +570,9 @@ class _BottomPanel extends StatefulWidget {
     required this.venues,
     required this.loading,
     required this.selectedVenue,
-    required this.typeColor,
+    required this.venueColor,
     required this.onVenueTap,
+    required this.onConfirm,
   });
 
   @override
@@ -643,14 +590,14 @@ class _BottomPanelState extends State<_BottomPanel> {
     final textPrimary = widget.textPrimary;
     final textSecondary = widget.textSecondary;
 
-    final panelRadius = const Radius.circular(24);
+    const panelRadius = Radius.circular(24);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeInOut,
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.only(topLeft: panelRadius, topRight: panelRadius),
+        borderRadius: const BorderRadius.only(topLeft: panelRadius, topRight: panelRadius),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: dark ? 0.5 : 0.1),
@@ -884,7 +831,7 @@ class _BottomPanelState extends State<_BottomPanel> {
                         ),
                       )
                     : SizedBox(
-                        height: 220,
+                        height: 200,
                         child: ListView.separated(
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                           scrollDirection: Axis.horizontal,
@@ -893,12 +840,12 @@ class _BottomPanelState extends State<_BottomPanel> {
                           itemBuilder: (context, i) {
                             final v = widget.venues[i];
                             final isSelected = widget.selectedVenue?.id == v.id;
-                            final color = widget.typeColor(v.type);
+                            final color = widget.venueColor(v.rating);
                             return GestureDetector(
                               onTap: () => widget.onVenueTap(v),
                               child: AnimatedContainer(
                                 duration: const Duration(milliseconds: 200),
-                                width: 180,
+                                width: 175,
                                 decoration: BoxDecoration(
                                   color: isSelected
                                       ? color.withValues(alpha: dark ? 0.25 : 0.08)
@@ -920,31 +867,46 @@ class _BottomPanelState extends State<_BottomPanel> {
                                         ]
                                       : null,
                                 ),
-                                padding: const EdgeInsets.all(14),
+                                padding: const EdgeInsets.all(12),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    // Type badge
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: color.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        v.type,
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w700,
-                                          color: color,
+                                    // Rating + distance row
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.star_rounded, size: 11, color: Color(0xFFFACC15)),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          v.rating.toStringAsFixed(1),
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: color,
+                                          ),
                                         ),
-                                      ),
+                                        const Spacer(),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: color.withValues(alpha: 0.12),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Text(
+                                            '${v.distanceKm.toStringAsFixed(1)} km',
+                                            style: TextStyle(
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.w600,
+                                              color: color,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 8),
+                                    const SizedBox(height: 7),
                                     Text(
                                       v.name,
                                       style: TextStyle(
-                                        fontSize: 13,
+                                        fontSize: 12,
                                         fontWeight: FontWeight.w700,
                                         color: isSelected
                                             ? color
@@ -973,31 +935,31 @@ class _BottomPanelState extends State<_BottomPanel> {
                                                   ? const Color(0xFF9CA3AF)
                                                   : const Color(0xFF6B7280),
                                             ),
-                                            maxLines: 2,
+                                            maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
                                       ],
                                     ),
-                                    const Spacer(),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: ElevatedButton(
-                                        onPressed: () {},
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: color,
-                                          foregroundColor: Colors.white,
-                                          elevation: 0,
-                                          padding: const EdgeInsets.symmetric(vertical: 7),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(10),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Icon(Icons.access_time,
+                                            size: 10,
+                                            color: dark
+                                                ? const Color(0xFF9CA3AF)
+                                                : const Color(0xFF6B7280)),
+                                        const SizedBox(width: 3),
+                                        Text(
+                                          '${v.openTime} – ${v.closeTime}',
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            color: dark
+                                                ? const Color(0xFF9CA3AF)
+                                                : const Color(0xFF6B7280),
                                           ),
                                         ),
-                                        child: const Text(
-                                          'Xem chi tiết',
-                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                                        ),
-                                      ),
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -1007,6 +969,33 @@ class _BottomPanelState extends State<_BottomPanel> {
                         ),
                       ),
           ),
+
+          // ── Confirm button ──────────────────────────────────────────────
+          if (widget.onConfirm != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: widget.onConfirm,
+                  icon: const Icon(Icons.check_circle_outline, size: 16),
+                  label: Text(
+                    'Xác nhận ${widget.venues.length} sân trong bán kính',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF22C55E),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 4,
+                    shadowColor: const Color(0x6622C55E),
+                  ),
+                ),
+              ),
+            ),
 
           // Safe area spacing
           SizedBox(height: MediaQuery.of(context).padding.bottom),
