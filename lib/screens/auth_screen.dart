@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/auth_api.dart';
+import '../services/google_sign_in_service.dart';
+import '../widgets/google_web_sign_in_button.dart';
 
 // ─── Public entry-point ───────────────────────────────────────────────────────
 
@@ -384,7 +387,25 @@ String _authErrorMessage(Object error, String fallback) {
   if (error is ApiException) {
     return error.message;
   }
+  if (error is GoogleSignInFlowException) {
+    return error.message;
+  }
   return fallback;
+}
+
+Future<void> _showForgotPasswordDialog(
+  BuildContext context, {
+  String initialEmail = '',
+}) async {
+  final message = await showDialog<String>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _ForgotPasswordDialog(initialEmail: initialEmail),
+  );
+
+  if (message != null && context.mounted) {
+    _showAuthSnackBar(context, message, error: false);
+  }
 }
 
 class _LoginPanel extends StatefulWidget {
@@ -407,6 +428,7 @@ class _LoginPanelState extends State<_LoginPanel> {
   final _pwCtrl = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
+  bool _googleLoading = false;
 
   @override
   void dispose() {
@@ -431,11 +453,37 @@ class _LoginPanelState extends State<_LoginPanel> {
         _showAuthSnackBar(
           context,
           _authErrorMessage(
-              error, 'Could not sign in. Check that the backend is running.'),
+              error, 'Không thể đăng nhập. Vui lòng kiểm tra máy chủ.'),
         );
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _submitGoogle({String? idToken}) async {
+    if (_googleLoading) {
+      return;
+    }
+
+    setState(() => _googleLoading = true);
+    try {
+      final googleIdToken =
+          idToken ?? await GoogleSignInService.instance.signInAndGetIdToken();
+      final session = await AuthApi().loginWithGoogle(idToken: googleIdToken);
+      if (mounted) widget.onSuccess(session);
+    } catch (error) {
+      if (mounted) {
+        _showAuthSnackBar(
+          context,
+          _authErrorMessage(
+            error,
+            'Không thể đăng nhập bằng Google. Vui lòng kiểm tra máy chủ.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
     }
   }
 
@@ -468,9 +516,15 @@ class _LoginPanelState extends State<_LoginPanel> {
 
             // Google sign-in
             _GoogleButton(
-              onTap: () => _showAuthSnackBar(
+              loading: _googleLoading,
+              onTap: () => _submitGoogle(),
+              onIdToken: (idToken) => _submitGoogle(idToken: idToken),
+              onError: (error) => _showAuthSnackBar(
                 context,
-                'Google sign-in is not connected to the backend yet.',
+                _authErrorMessage(
+                  error,
+                  'Không thể đăng nhập bằng Google.',
+                ),
               ),
             ),
             const SizedBox(height: 18),
@@ -488,10 +542,10 @@ class _LoginPanelState extends State<_LoginPanel> {
               keyboardType: TextInputType.emailAddress,
               validator: (v) {
                 if (v == null || v.trim().isEmpty) {
-                  return 'Email is required';
+                  return 'Vui lòng nhập email';
                 }
                 if (!v.contains('@')) {
-                  return 'Enter a valid email';
+                  return 'Email không hợp lệ';
                 }
                 return null;
               },
@@ -517,10 +571,10 @@ class _LoginPanelState extends State<_LoginPanel> {
               ),
               validator: (v) {
                 if (v == null || v.isEmpty) {
-                  return 'Password is required';
+                  return 'Vui lòng nhập mật khẩu';
                 }
                 if (v.length < 6) {
-                  return 'At least 6 characters';
+                  return 'Mật khẩu phải có ít nhất 6 ký tự';
                 }
                 return null;
               },
@@ -531,7 +585,10 @@ class _LoginPanelState extends State<_LoginPanel> {
             Align(
               alignment: Alignment.centerRight,
               child: GestureDetector(
-                onTap: () {},
+                onTap: () => _showForgotPasswordDialog(
+                  context,
+                  initialEmail: _emailCtrl.text.trim(),
+                ),
                 child: Text(
                   'Forgot password?',
                   style: TextStyle(
@@ -614,6 +671,7 @@ class _RegisterPanelState extends State<_RegisterPanel> {
   bool _obscurePw = true;
   bool _obscureConfirm = true;
   bool _loading = false;
+  bool _googleLoading = false;
 
   @override
   void dispose() {
@@ -643,12 +701,38 @@ class _RegisterPanelState extends State<_RegisterPanel> {
       if (mounted) {
         _showAuthSnackBar(
           context,
-          _authErrorMessage(error,
-              'Could not create account. Check that the backend is running.'),
+          _authErrorMessage(
+              error, 'Không thể tạo tài khoản. Vui lòng kiểm tra máy chủ.'),
         );
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _submitGoogle({String? idToken}) async {
+    if (_googleLoading) {
+      return;
+    }
+
+    setState(() => _googleLoading = true);
+    try {
+      final googleIdToken =
+          idToken ?? await GoogleSignInService.instance.signInAndGetIdToken();
+      final session = await AuthApi().loginWithGoogle(idToken: googleIdToken);
+      if (mounted) widget.onSuccess(session);
+    } catch (error) {
+      if (mounted) {
+        _showAuthSnackBar(
+          context,
+          _authErrorMessage(
+            error,
+            'Không thể tiếp tục với Google. Vui lòng kiểm tra máy chủ.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
     }
   }
 
@@ -682,9 +766,15 @@ class _RegisterPanelState extends State<_RegisterPanel> {
             // Google sign-up
             _GoogleButton(
               label: 'Sign up with Google',
-              onTap: () => _showAuthSnackBar(
+              loading: _googleLoading,
+              onTap: () => _submitGoogle(),
+              onIdToken: (idToken) => _submitGoogle(idToken: idToken),
+              onError: (error) => _showAuthSnackBar(
                 context,
-                'Google sign-up is not connected to the backend yet.',
+                _authErrorMessage(
+                  error,
+                  'Không thể tiếp tục với Google.',
+                ),
               ),
             ),
             const SizedBox(height: 18),
@@ -700,7 +790,7 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               icon: Icons.person_outline,
               validator: (v) {
                 if (v == null || v.trim().isEmpty) {
-                  return 'Username is required';
+                  return 'Vui lòng nhập tên người dùng';
                 }
                 return null;
               },
@@ -716,10 +806,10 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               keyboardType: TextInputType.emailAddress,
               validator: (v) {
                 if (v == null || v.trim().isEmpty) {
-                  return 'Email is required';
+                  return 'Vui lòng nhập email';
                 }
                 if (!v.contains('@')) {
-                  return 'Enter a valid email';
+                  return 'Email không hợp lệ';
                 }
                 return null;
               },
@@ -754,10 +844,16 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               ),
               validator: (v) {
                 if (v == null || v.isEmpty) {
-                  return 'Password is required';
+                  return 'Vui lòng nhập mật khẩu';
                 }
-                if (v.length < 6) {
-                  return 'At least 6 characters';
+                if (v.length < 8) {
+                  return 'Mật khẩu phải có ít nhất 8 ký tự';
+                }
+                final strongPassword = RegExp(
+                  r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).+$',
+                ).hasMatch(v);
+                if (!strongPassword) {
+                  return 'Mật khẩu cần có chữ hoa, chữ thường, số và ký tự đặc biệt';
                 }
                 return null;
               },
@@ -784,10 +880,10 @@ class _RegisterPanelState extends State<_RegisterPanel> {
               ),
               validator: (v) {
                 if (v == null || v.isEmpty) {
-                  return 'Please confirm password';
+                  return 'Vui lòng xác nhận mật khẩu';
                 }
                 if (v != _pwCtrl.text) {
-                  return 'Passwords do not match';
+                  return 'Mật khẩu xác nhận không khớp';
                 }
                 return null;
               },
@@ -835,6 +931,289 @@ class _RegisterPanelState extends State<_RegisterPanel> {
 }
 
 // ─── Shared Widgets ───────────────────────────────────────────────────────────
+
+class _ForgotPasswordDialog extends StatefulWidget {
+  final String initialEmail;
+
+  const _ForgotPasswordDialog({required this.initialEmail});
+
+  @override
+  State<_ForgotPasswordDialog> createState() => _ForgotPasswordDialogState();
+}
+
+class _ForgotPasswordDialogState extends State<_ForgotPasswordDialog> {
+  final _emailCtrl = TextEditingController();
+  final _tokenCtrl = TextEditingController();
+  final _newPasswordCtrl = TextEditingController();
+  final _confirmPasswordCtrl = TextEditingController();
+
+  bool _requesting = false;
+  bool _resetting = false;
+  bool _tokenRequested = false;
+  bool _obscureNewPassword = true;
+  bool _obscureConfirmPassword = true;
+  String? _statusMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailCtrl.text = widget.initialEmail;
+  }
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _tokenCtrl.dispose();
+    _newPasswordCtrl.dispose();
+    _confirmPasswordCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _requestResetToken() async {
+    final emailError = _emailError(_emailCtrl.text);
+    if (emailError != null) {
+      setState(() => _statusMessage = emailError);
+      return;
+    }
+
+    setState(() {
+      _requesting = true;
+      _statusMessage = null;
+    });
+
+    try {
+      final result = await AuthApi().forgotPassword(
+        email: _emailCtrl.text.trim(),
+      );
+
+      setState(() {
+        _tokenRequested = true;
+        _statusMessage = result.message;
+      });
+    } catch (error) {
+      setState(() {
+        _statusMessage = _authErrorMessage(
+          error,
+          'Không thể tạo mã đặt lại mật khẩu. Vui lòng kiểm tra máy chủ.',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _requesting = false);
+      }
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final validationMessage = _resetValidationMessage();
+    if (validationMessage != null) {
+      setState(() => _statusMessage = validationMessage);
+      return;
+    }
+
+    setState(() {
+      _resetting = true;
+      _statusMessage = null;
+    });
+
+    try {
+      final message = await AuthApi().resetPassword(
+        email: _emailCtrl.text.trim(),
+        token: _tokenCtrl.text.trim(),
+        newPassword: _newPasswordCtrl.text,
+      );
+
+      if (mounted) {
+        Navigator.of(context).pop(message);
+      }
+    } catch (error) {
+      setState(() {
+        _statusMessage = _authErrorMessage(
+          error,
+          'Không thể đặt lại mật khẩu. Vui lòng kiểm tra thông tin và thử lại.',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _resetting = false);
+      }
+    }
+  }
+
+  String? _emailError(String value) {
+    final email = value.trim();
+    if (email.isEmpty) {
+      return 'Vui lòng nhập email';
+    }
+    if (!email.contains('@')) {
+      return 'Email không hợp lệ';
+    }
+    return null;
+  }
+
+  String? _resetValidationMessage() {
+    final emailError = _emailError(_emailCtrl.text);
+    if (emailError != null) {
+      return emailError;
+    }
+    if (_tokenCtrl.text.trim().isEmpty) {
+      return 'Vui lòng nhập mã đặt lại mật khẩu';
+    }
+    if (_newPasswordCtrl.text.isEmpty) {
+      return 'Vui lòng nhập mật khẩu mới';
+    }
+    if (_newPasswordCtrl.text.length < 8) {
+      return 'Mật khẩu mới phải có ít nhất 8 ký tự';
+    }
+    final strongPassword = RegExp(
+      r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).+$',
+    ).hasMatch(_newPasswordCtrl.text);
+    if (!strongPassword) {
+      return 'Mật khẩu mới cần có chữ hoa, chữ thường, số và ký tự đặc biệt';
+    }
+    if (_newPasswordCtrl.text != _confirmPasswordCtrl.text) {
+      return 'Mật khẩu xác nhận không khớp';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 430,
+        constraints: const BoxConstraints(maxWidth: 430),
+        padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF064E3B),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.22),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 26,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Quên mật khẩu',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Đóng',
+                    onPressed: _requesting || _resetting
+                        ? null
+                        : () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _GlassField(
+                controller: _emailCtrl,
+                label: 'Email',
+                hint: 'you@example.com',
+                icon: Icons.email_outlined,
+                keyboardType: TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 14),
+              _PrimaryButton(
+                label: 'Gửi mã đặt lại',
+                loading: _requesting,
+                onTap: _requestResetToken,
+              ),
+              if (_tokenRequested) ...[
+                const SizedBox(height: 18),
+                _GlassField(
+                  controller: _tokenCtrl,
+                  label: 'Mã đặt lại mật khẩu',
+                  hint: 'Nhập mã trong email',
+                  icon: Icons.pin_outlined,
+                ),
+                const SizedBox(height: 12),
+                _GlassField(
+                  controller: _newPasswordCtrl,
+                  label: 'Mật khẩu mới',
+                  hint: '••••••••',
+                  icon: Icons.lock_reset_outlined,
+                  obscureText: _obscureNewPassword,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureNewPassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureNewPassword = !_obscureNewPassword,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _GlassField(
+                  controller: _confirmPasswordCtrl,
+                  label: 'Xác nhận mật khẩu',
+                  hint: '••••••••',
+                  icon: Icons.lock_outline,
+                  obscureText: _obscureConfirmPassword,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureConfirmPassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureConfirmPassword = !_obscureConfirmPassword,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _PrimaryButton(
+                  label: 'Đặt lại mật khẩu',
+                  loading: _resetting,
+                  onTap: _resetPassword,
+                ),
+              ],
+              if (_statusMessage != null) ...[
+                const SizedBox(height: 14),
+                Text(
+                  _statusMessage!,
+                  style: const TextStyle(
+                    color: Color(0xFFFDE68A),
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _GlassField extends StatelessWidget {
   final TextEditingController controller;
@@ -987,17 +1366,106 @@ class _PrimaryButton extends StatelessWidget {
   }
 }
 
-class _GoogleButton extends StatelessWidget {
+class _GoogleButton extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
+  final ValueChanged<String> onIdToken;
+  final ValueChanged<Object> onError;
+  final bool loading;
 
   const _GoogleButton({
     this.label = 'Continue with Google',
     required this.onTap,
+    required this.onIdToken,
+    required this.onError,
+    required this.loading,
   });
 
   @override
+  State<_GoogleButton> createState() => _GoogleButtonState();
+}
+
+class _GoogleButtonState extends State<_GoogleButton> {
+  StreamSubscription<String>? _idTokenSubscription;
+  StreamSubscription<Object>? _errorSubscription;
+  Timer? _webErrorReportTimer;
+  bool _reportWebErrors = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (kIsWeb) {
+      _errorSubscription =
+          GoogleSignInService.instance.errors.listen(_handleWebError);
+      _idTokenSubscription =
+          GoogleSignInService.instance.idTokens.listen(widget.onIdToken);
+    }
+  }
+
+  @override
+  void dispose() {
+    _idTokenSubscription?.cancel();
+    _errorSubscription?.cancel();
+    _webErrorReportTimer?.cancel();
+    super.dispose();
+  }
+
+  void _allowWebErrorReporting() {
+    _reportWebErrors = true;
+    _webErrorReportTimer?.cancel();
+    _webErrorReportTimer = Timer(const Duration(seconds: 30), () {
+      _reportWebErrors = false;
+    });
+  }
+
+  void _handleWebError(Object error) {
+    if (!_reportWebErrors) {
+      return;
+    }
+
+    widget.onError(error);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (widget.loading) {
+      return const _GoogleButtonFrame(
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            valueColor: AlwaysStoppedAnimation(Color(0xFF1F2937)),
+          ),
+        ),
+      );
+    }
+
+    if (kIsWeb) {
+      return SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (_) => _allowWebErrorReporting(),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _GoogleButtonFrame(
+                child: _GoogleButtonContent(label: widget.label),
+              ),
+              Center(
+                child: Opacity(
+                  opacity: 0.01,
+                  child: buildGoogleWebSignInButton(label: widget.label),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return SizedBox(
       width: double.infinity,
       height: 50,
@@ -1005,7 +1473,7 @@ class _GoogleButton extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: onTap,
+          onTap: widget.onTap,
           child: Ink(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -1018,25 +1486,61 @@ class _GoogleButton extends StatelessWidget {
                 ),
               ],
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Google "G" logo painted manually
-                const _GoogleLogo(size: 20),
-                const SizedBox(width: 10),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Color(0xFF1F2937),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
+            child: _GoogleButtonContent(label: widget.label),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GoogleButtonContent extends StatelessWidget {
+  final String label;
+
+  const _GoogleButtonContent({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const _GoogleLogo(size: 20),
+        const SizedBox(width: 10),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF1F2937),
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _GoogleButtonFrame extends StatelessWidget {
+  final Widget child;
+
+  const _GoogleButtonFrame({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: 50,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Center(child: child),
     );
   }
 }

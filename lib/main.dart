@@ -124,6 +124,7 @@ class _RootScaffold extends StatelessWidget {
         return ProfileScreen(
             isDarkMode: isDarkMode,
             user: authSession?.user,
+            token: authSession?.token,
             onDarkModeChanged: onDarkModeChanged);
       default:
         return HomeScreen(isDarkMode: isDarkMode);
