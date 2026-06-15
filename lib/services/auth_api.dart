@@ -22,6 +22,7 @@ class AuthApi {
     required String email,
     required String password,
     String? city,
+    String? commune,
     String? profileImageUrl,
   }) async {
     final response = await _postJson('/api/auth/register', {
@@ -29,6 +30,7 @@ class AuthApi {
       'email': email,
       'password': password,
       'city': city,
+      'commune': commune,
       'profileImageUrl': profileImageUrl,
     });
 
@@ -308,6 +310,7 @@ class AuthUser {
   final String userType;
   final String? profileImageUrl;
   final String? city;
+  final String? commune;
 
   const AuthUser({
     required this.userId,
@@ -316,6 +319,7 @@ class AuthUser {
     required this.userType,
     required this.profileImageUrl,
     required this.city,
+    required this.commune,
   });
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
@@ -326,6 +330,7 @@ class AuthUser {
       userType: json['userType'] as String? ?? 'User',
       profileImageUrl: json['profileImageUrl'] as String?,
       city: json['city'] as String?,
+      commune: json['commune'] as String?,
     );
   }
 }
@@ -333,34 +338,49 @@ class AuthUser {
 class UpdateProfileRequest {
   final String username;
   final String? city;
+  final String? commune;
   final String? profileImageUrl;
   final double skillLevel;
   final String? playerSubType;
-  final String? dominantHand;
-  final String? preferredPosition;
+  final String? playFrequency;
+  final String? preferredTimeSlot;
   final String? bio;
+  final DateTime? birthDate;
+  final String? gender;
+  final double? heightCm;
+  final double? weightKg;
 
   const UpdateProfileRequest({
     required this.username,
     required this.city,
+    required this.commune,
     required this.profileImageUrl,
     required this.skillLevel,
     required this.playerSubType,
-    required this.dominantHand,
-    required this.preferredPosition,
+    required this.playFrequency,
+    required this.preferredTimeSlot,
     required this.bio,
+    required this.birthDate,
+    required this.gender,
+    required this.heightCm,
+    required this.weightKg,
   });
 
   Map<String, dynamic> toJson() {
     return {
       'username': username,
       'city': city,
+      'commune': commune,
       'profileImageUrl': profileImageUrl,
       'skillLevel': skillLevel,
       'playerSubType': playerSubType,
-      'dominantHand': dominantHand,
-      'preferredPosition': preferredPosition,
+      'playFrequency': playFrequency,
+      'preferredTimeSlot': preferredTimeSlot,
       'bio': bio,
+      'birthDate': birthDate == null ? null : _dateOnly(birthDate!),
+      'gender': gender,
+      'heightCm': heightCm,
+      'weightKg': weightKg,
     };
   }
 }
@@ -372,13 +392,18 @@ class UserProfile {
   final String userType;
   final String? profileImageUrl;
   final String? city;
+  final String? commune;
   final int? playerId;
   final double? skillLevel;
   final int? prestige;
   final String? playerSubType;
-  final String? dominantHand;
-  final String? preferredPosition;
+  final String? playFrequency;
+  final String? preferredTimeSlot;
   final String? bio;
+  final DateTime? birthDate;
+  final String? gender;
+  final double? heightCm;
+  final double? weightKg;
   final int matchesPlayed;
   final List<ProfileMatch> matchHistory;
 
@@ -389,13 +414,18 @@ class UserProfile {
     required this.userType,
     required this.profileImageUrl,
     required this.city,
+    required this.commune,
     required this.playerId,
     required this.skillLevel,
     required this.prestige,
     required this.playerSubType,
-    required this.dominantHand,
-    required this.preferredPosition,
+    required this.playFrequency,
+    required this.preferredTimeSlot,
     required this.bio,
+    required this.birthDate,
+    required this.gender,
+    required this.heightCm,
+    required this.weightKg,
     required this.matchesPlayed,
     required this.matchHistory,
   });
@@ -410,13 +440,18 @@ class UserProfile {
       userType: json['userType'] as String? ?? 'User',
       profileImageUrl: json['profileImageUrl'] as String?,
       city: json['city'] as String?,
+      commune: json['commune'] as String?,
       playerId: _asInt(json['playerId']),
       skillLevel: _asDouble(json['skillLevel']),
       prestige: _asInt(json['prestige']),
       playerSubType: json['playerSubType'] as String?,
-      dominantHand: json['dominantHand'] as String?,
-      preferredPosition: json['preferredPosition'] as String?,
+      playFrequency: json['playFrequency'] as String?,
+      preferredTimeSlot: json['preferredTimeSlot'] as String?,
       bio: json['bio'] as String?,
+      birthDate: DateTime.tryParse(json['birthDate'] as String? ?? ''),
+      gender: json['gender'] as String?,
+      heightCm: _asDouble(json['heightCm']),
+      weightKg: _asDouble(json['weightKg']),
       matchesPlayed: _asInt(json['matchesPlayed']) ?? 0,
       matchHistory: matchesJson is List
           ? matchesJson
@@ -435,13 +470,18 @@ class UserProfile {
       userType: user?.userType ?? 'User',
       profileImageUrl: user?.profileImageUrl,
       city: user?.city,
+      commune: user?.commune,
       playerId: null,
       skillLevel: null,
       prestige: null,
       playerSubType: null,
-      dominantHand: null,
-      preferredPosition: null,
+      playFrequency: null,
+      preferredTimeSlot: null,
       bio: null,
+      birthDate: null,
+      gender: null,
+      heightCm: null,
+      weightKg: null,
       matchesPlayed: 0,
       matchHistory: const [],
     );
@@ -501,4 +541,11 @@ double? _asDouble(Object? value) {
   if (value is num) return value.toDouble();
   if (value is String) return double.tryParse(value);
   return null;
+}
+
+String _dateOnly(DateTime value) {
+  final local = value.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}-'
+      '${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')}';
 }
