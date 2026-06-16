@@ -115,7 +115,10 @@ class _RootScaffold extends StatelessWidget {
       case 0:
         return RankScreen(isDarkMode: isDarkMode);
       case 1:
-        return SocialScreen(isDarkMode: isDarkMode);
+        return SocialScreen(
+          isDarkMode: isDarkMode,
+          authSession: authSession,
+        );
       case 2:
         return HomeScreen(isDarkMode: isDarkMode, authSession: authSession);
       case 3:
