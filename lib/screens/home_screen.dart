@@ -113,7 +113,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final String _locationLabel = 'Hà Nội';
+  String _locationLabel = 'Hà Nội';
   String _locationDistance = '3km';
   bool _searching = false;
   int _lobbySize = 4;
@@ -185,12 +185,73 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$hh:$mm:00';
   }
 
-  /// Kicks off real matchmaking via the FindMatchModule (port 5063):
-  ///  1. POST /api/match/enqueue  → 202 Accepted with queueId
-  ///  2. Every 10 s: GET /api/match/{queueId}
-  ///     • 200 OK  → matched, show popup
-  ///     • 202     → still waiting, keep polling
+  /// Guards matchmaking: blocks and notifies user if no venues are selected,
+  /// then runs the real matchmaking flow.
   Future<void> _findMatch() async {
+    // ── Guard: require at least one venue ────────────────────────────────
+    if (_selectedVenueIds.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          duration: const Duration(seconds: 4),
+          content: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x66EF4444),
+                  blurRadius: 16,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Row(
+              children: [
+                const Text('🏕️', style: TextStyle(fontSize: 20)),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Chưa chọn sân!',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Hãy chọn sân trước khi tìm trận. Nhấn nút vị trí ở góc trên bên trái.',
+                        style: TextStyle(
+                          color: Color(0xFFFECACA),
+                          fontSize: 11,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                const Icon(Icons.arrow_upward_rounded, color: Colors.white, size: 18),
+              ],
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
     final token = widget.authSession?.token;
     if (token == null) {
       if (mounted) {
@@ -307,16 +368,17 @@ class _HomeScreenState extends State<HomeScreen> {
   int get _filled => _players.where((p) => p != null).length;
 
   void _openMapScreen() async {
-    final result = await Navigator.of(context).push<List<int>>(
+    final result = await Navigator.of(context).push<MapResult>(
       MaterialPageRoute(
         builder: (_) => MapScreen(isDarkMode: widget.isDarkMode),
       ),
     );
-    if (result != null && result.isNotEmpty && mounted) {
+    if (result != null && mounted) {
       setState(() {
-        _selectedVenueIds = result;
-        // Update the location badge to reflect venue count
-        _locationDistance = '${result.length} sân';
+        _selectedVenueIds = result.venueIds;
+        // Update the location badge with the real city name and radius
+        _locationLabel = result.locationLabel;
+        _locationDistance = '${result.radiusKm.toStringAsFixed(1)}km';
       });
     }
   }
@@ -331,7 +393,13 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _HomeTopBar(dark: dark, label: _locationLabel, distance: _locationDistance, onLocationTap: _openMapScreen),
+          _HomeTopBar(
+            dark: dark,
+            label: _locationLabel,
+            distance: _locationDistance,
+            venueCount: _selectedVenueIds.length,
+            onLocationTap: _openMapScreen,
+          ),
           _LobbySection(
             dark: dark,
             players: _players,
@@ -357,15 +425,51 @@ class _HomeScreenState extends State<HomeScreen> {
 
 // ─── Top Bar ─────────────────────────────────────────────────────────────────
 
-class _HomeTopBar extends StatelessWidget {
+class _HomeTopBar extends StatefulWidget {
   final bool dark;
   final String label;
   final String distance;
+  final int venueCount;
   final VoidCallback onLocationTap;
-  const _HomeTopBar({required this.dark, required this.label, required this.distance, required this.onLocationTap});
+  const _HomeTopBar({
+    required this.dark,
+    required this.label,
+    required this.distance,
+    required this.venueCount,
+    required this.onLocationTap,
+  });
+
+  @override
+  State<_HomeTopBar> createState() => _HomeTopBarState();
+}
+
+class _HomeTopBarState extends State<_HomeTopBar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseCtrl;
+  late final Animation<double> _pulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final dark = widget.dark;
+    final noVenues = widget.venueCount == 0;
     final bg = dark ? const Color(0xFF1F2937) : Colors.white;
     final border = dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB);
 
@@ -375,28 +479,81 @@ class _HomeTopBar extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Location pill
+          // Location pill — glows amber when no venues selected
           GestureDetector(
-            onTap: onLocationTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: dark ? const Color(0xFF374151) : const Color(0xFFF9FAFB),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB)),
+            onTap: widget.onLocationTap,
+            child: AnimatedBuilder(
+              animation: _pulseAnim,
+              builder: (_, child) => Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: dark ? const Color(0xFF374151) : const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: noVenues
+                        ? Color.lerp(
+                            const Color(0xFFF59E0B),
+                            const Color(0xFFFCD34D),
+                            _pulseAnim.value,
+                          )!
+                        : dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB),
+                    width: noVenues ? 1.5 : 1.0,
+                  ),
+                  boxShadow: noVenues
+                      ? [
+                          BoxShadow(
+                            color: const Color(0xFFF59E0B).withValues(
+                              alpha: _pulseAnim.value * 0.4,
+                            ),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          ),
+                        ]
+                      : null,
+                ),
+                child: child,
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.location_on_outlined, size: 15, color: Color(0xFF22C55E)),
-                const SizedBox(width: 4),
-                Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: dark ? Colors.white : const Color(0xFF111827))),
+                // Dot indicator: amber when no venues, green otherwise
+                Container(
+                  width: 6,
+                  height: 6,
+                  margin: const EdgeInsets.only(right: 5),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: noVenues ? const Color(0xFFF59E0B) : const Color(0xFF22C55E),
+                  ),
+                ),
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: dark ? Colors.white : const Color(0xFF111827),
+                  ),
+                ),
                 const SizedBox(width: 4),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(color: const Color(0xFFDCFCE7), borderRadius: BorderRadius.circular(8)),
-                  child: Text(distance, style: const TextStyle(fontSize: 9, color: Color(0xFF15803D), fontWeight: FontWeight.w600)),
+                  decoration: BoxDecoration(
+                    color: noVenues ? const Color(0xFFFEF3C7) : const Color(0xFFDCFCE7),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    noVenues ? 'Chọn sân' : widget.distance,
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: noVenues ? const Color(0xFFB45309) : const Color(0xFF15803D),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 2),
-                Icon(Icons.keyboard_arrow_down_outlined, size: 13, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                Icon(
+                  Icons.keyboard_arrow_down_outlined,
+                  size: 13,
+                  color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                ),
               ]),
             ),
           ),

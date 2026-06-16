@@ -8,6 +8,23 @@ import 'package:http/http.dart' as http;
 import '../services/auth_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Map Result — returned to HomeScreen via Navigator.pop
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Carries all data that HomeScreen needs after the user confirms venues.
+class MapResult {
+  final List<int> venueIds;
+  final String locationLabel; // e.g. "Hà Nội"
+  final double radiusKm;
+
+  const MapResult({
+    required this.venueIds,
+    required this.locationLabel,
+    required this.radiusKm,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Model
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -322,8 +339,17 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               onConfirm: _venues.isEmpty
                   ? null
                   : () {
-                      final ids = _venues.map((v) => v.id).toList();
-                      Navigator.of(context).pop(ids);
+                      // Extract a short city/district name from the full label.
+                      // e.g. "Hoàn Kiếm, Hà Nội, Việt Nam" → "Hoàn Kiếm, Hà Nội"
+                      final parts = _locLabel.split(',');
+                      final shortLabel = parts.take(2).join(',').trim();
+                      Navigator.of(context).pop(
+                        MapResult(
+                          venueIds: _venues.map((v) => v.id).toList(),
+                          locationLabel: shortLabel.isEmpty ? _locLabel : shortLabel,
+                          radiusKm: _radiusKm,
+                        ),
+                      );
                     },
             ),
           ),
