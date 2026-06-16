@@ -809,7 +809,7 @@ class _BioCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = _valueOrFallback(
       profile.bio,
-      'Người chơi PickleMatch đang xây dựng hồ sơ thi đấu.',
+      'Người chơi Picklink đang xây dựng hồ sơ thi đấu.',
     );
     final secondary = dark ? const Color(0xFFD1D5DB) : const Color(0xFF374151);
 

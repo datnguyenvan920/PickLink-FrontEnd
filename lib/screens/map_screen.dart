@@ -143,7 +143,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         '?lat=${pos.latitude}&lon=${pos.longitude}'
         '&format=json&accept-language=vi',
       );
-      final res = await http.get(uri, headers: {'User-Agent': 'PickleMatch/1.0'});
+      final res = await http.get(uri, headers: {'User-Agent': 'Picklink/1.0'});
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         final display = data['display_name'] as String? ?? '';

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'map_screen.dart';
 import '../services/auth_api.dart';
 import '../services/match_api.dart';
+import 'match_voting_screen.dart';
 
 // ─── Enums & Models ──────────────────────────────────────────────────────────
 
@@ -345,7 +346,21 @@ class _HomeScreenState extends State<HomeScreen> {
         match: match,
         onAccept: () {
           Navigator.of(context).pop();
-          // TODO: navigate to match detail / booking screen
+          if (match.matchId != null) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => MatchVotingScreen(
+                  matchId: match.matchId!,
+                  authSession: widget.authSession!,
+                  isDarkMode: widget.isDarkMode,
+                ),
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Không tìm thấy thông tin trận đấu để bầu chọn.')),
+            );
+          }
         },
         onDecline: () {
           Navigator.of(context).pop();
@@ -565,7 +580,7 @@ class _HomeTopBarState extends State<_HomeTopBar>
               child: const Center(child: Text('PB', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900))),
             ),
             const SizedBox(width: 5),
-            Text('PickleMatch', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: dark ? const Color(0xFF4ADE80) : const Color(0xFF16A34A))),
+            Text('Picklink', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: dark ? const Color(0xFF4ADE80) : const Color(0xFF16A34A))),
           ]),
         ],
       ),

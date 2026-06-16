@@ -95,6 +95,62 @@ class MatchApi {
       statusCode: response.statusCode,
     );
   }
+
+  // ── GET /api/match/{matchId}/voting-status ─────────────────────────────────
+
+  /// Fetches the candidate time slots, candidate venues, and current voting status for a match.
+  Future<MatchVotingStatusResponse> getVotingStatus(String token, int matchId) async {
+    final response = await _client.get(
+      Uri.parse('$baseUrl/api/match/$matchId/voting-status'),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'Failed to fetch voting status (${response.statusCode})',
+        statusCode: response.statusCode,
+      );
+    }
+
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    return MatchVotingStatusResponse.fromJson(decoded);
+  }
+
+  // ── POST /api/match/{matchId}/vote ─────────────────────────────────────────
+
+  /// Submits a player's vote for the match venue and start time.
+  Future<MatchVotingStatusResponse> castVote({
+    required String token,
+    required int matchId,
+    required int venueId,
+    required String startTime,
+  }) async {
+    final response = await _client.post(
+      Uri.parse('$baseUrl/api/match/$matchId/vote'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'venueId': venueId,
+        'startTime': startTime,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'Failed to cast vote (${response.statusCode})',
+        statusCode: response.statusCode,
+      );
+    }
+
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    return MatchVotingStatusResponse.fromJson(decoded);
+  }
 }
 
 // ─── DTOs ─────────────────────────────────────────────────────────────────────
@@ -191,6 +247,7 @@ class LobbyStatusResponse {
   final List<LobbyPlayerDto> players;
   final String lobbyType;
   final int lobbySize;
+  final int? matchId;
 
   const LobbyStatusResponse({
     required this.queueId,
@@ -198,6 +255,7 @@ class LobbyStatusResponse {
     required this.players,
     required this.lobbyType,
     required this.lobbySize,
+    this.matchId,
   });
 
   bool get isMatched => matchedAt != null;
@@ -216,6 +274,7 @@ class LobbyStatusResponse {
           .toList(),
       lobbyType: (json['lobbyType'] ?? 'normal') as String,
       lobbySize: (json['lobbySize'] as num?)?.toInt() ?? 4,
+      matchId:   json['matchId'] as int?,
     );
   }
 
@@ -227,6 +286,110 @@ class LobbyStatusResponse {
       players:   [],
       lobbyType: 'normal',
       lobbySize: 4,
+      matchId:   null,
+    );
+  }
+}
+
+// ─── Voting System DTOs ────────────────────────────────────────────────────────
+
+class MatchVotingStatusResponse {
+  final int matchId;
+  final String status;
+  final String preferredTimeStart;
+  final String preferredTimeEnd;
+  final List<CandidateSlotDto> candidateSlots;
+  final List<CandidateVenueDto> candidateVenues;
+  final List<ParticipantVoteDto> votes;
+
+  const MatchVotingStatusResponse({
+    required this.matchId,
+    required this.status,
+    required this.preferredTimeStart,
+    required this.preferredTimeEnd,
+    required this.candidateSlots,
+    required this.candidateVenues,
+    required this.votes,
+  });
+
+  factory MatchVotingStatusResponse.fromJson(Map<String, dynamic> json) {
+    return MatchVotingStatusResponse(
+      matchId: json['matchId'] as int,
+      status: json['status'] as String,
+      preferredTimeStart: json['preferredTimeStart'] ?? '',
+      preferredTimeEnd: json['preferredTimeEnd'] ?? '',
+      candidateSlots: (json['candidateSlots'] as List<dynamic>? ?? [])
+          .map((e) => CandidateSlotDto.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      candidateVenues: (json['candidateVenues'] as List<dynamic>? ?? [])
+          .map((e) => CandidateVenueDto.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      votes: (json['votes'] as List<dynamic>? ?? [])
+          .map((e) => ParticipantVoteDto.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class CandidateSlotDto {
+  final String start;
+  final String end;
+
+  const CandidateSlotDto({required this.start, required this.end});
+
+  factory CandidateSlotDto.fromJson(Map<String, dynamic> json) {
+    return CandidateSlotDto(
+      start: json['start'] as String? ?? '00:00:00',
+      end: json['end'] as String? ?? '00:00:00',
+    );
+  }
+}
+
+class CandidateVenueDto {
+  final int venueId;
+  final String venueName;
+  final String address;
+
+  const CandidateVenueDto({
+    required this.venueId,
+    required this.venueName,
+    required this.address,
+  });
+
+  factory CandidateVenueDto.fromJson(Map<String, dynamic> json) {
+    return CandidateVenueDto(
+      venueId: json['venueId'] as int,
+      venueName: json['venueName'] as String? ?? '',
+      address: json['address'] as String? ?? '',
+    );
+  }
+}
+
+class ParticipantVoteDto {
+  final int playerId;
+  final String playerName;
+  final String? playerProfilePictureUrl;
+  final int? votedVenueId;
+  final String? votedStartTime;
+  final String? votedEndTime;
+
+  const ParticipantVoteDto({
+    required this.playerId,
+    required this.playerName,
+    this.playerProfilePictureUrl,
+    this.votedVenueId,
+    this.votedStartTime,
+    this.votedEndTime,
+  });
+
+  factory ParticipantVoteDto.fromJson(Map<String, dynamic> json) {
+    return ParticipantVoteDto(
+      playerId: json['playerId'] as int,
+      playerName: json['playerName'] as String? ?? '',
+      playerProfilePictureUrl: json['playerProfilePictureUrl'] as String?,
+      votedVenueId: json['votedVenueId'] as int?,
+      votedStartTime: json['votedStartTime'] as String?,
+      votedEndTime: json['votedEndTime'] as String?,
     );
   }
 }
