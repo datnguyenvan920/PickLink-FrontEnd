@@ -665,7 +665,6 @@ class _RegisterPanelState extends State<_RegisterPanel> {
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
-  final _cityCtrl = TextEditingController(text: 'Ho Chi Minh');
   final _pwCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
   bool _obscurePw = true;
@@ -677,7 +676,6 @@ class _RegisterPanelState extends State<_RegisterPanel> {
   void dispose() {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
-    _cityCtrl.dispose();
     _pwCtrl.dispose();
     _confirmCtrl.dispose();
     super.dispose();
@@ -693,7 +691,6 @@ class _RegisterPanelState extends State<_RegisterPanel> {
         username: _nameCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
         password: _pwCtrl.text,
-        city: _cityCtrl.text.trim().isEmpty ? null : _cityCtrl.text.trim(),
         profileImageUrl: null,
       );
       if (mounted) widget.onSuccess(session);
@@ -813,15 +810,6 @@ class _RegisterPanelState extends State<_RegisterPanel> {
                 }
                 return null;
               },
-            ),
-            const SizedBox(height: 12),
-
-            // City
-            _GlassField(
-              controller: _cityCtrl,
-              label: 'City',
-              hint: 'Ho Chi Minh',
-              icon: Icons.location_on_outlined,
             ),
             const SizedBox(height: 12),
 
