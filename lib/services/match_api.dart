@@ -1,9 +1,8 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'auth_api.dart' show ApiException;
+import 'platform_info.dart';
 
 // ─── Base URL ─────────────────────────────────────────────────────────────────
 
@@ -15,7 +14,7 @@ const _kEnvMatchUrl = String.fromEnvironment('MATCH_API_URL', defaultValue: '');
 
 String get _matchBaseUrl {
   if (_kEnvMatchUrl.isNotEmpty) return _kEnvMatchUrl;
-  if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:5015';
+  if (isAndroidPlatform) return 'http://10.0.2.2:5015';
   return 'http://localhost:5015';
 }
 

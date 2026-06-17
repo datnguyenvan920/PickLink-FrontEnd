@@ -1445,7 +1445,7 @@ class _GoogleButtonState extends State<_GoogleButton> {
               Center(
                 child: Opacity(
                   opacity: 0.01,
-                  child: buildGoogleWebSignInButton(label: widget.label),
+                  child: _SafeGoogleWebSignInButton(label: widget.label),
                 ),
               ),
             ],
@@ -1479,6 +1479,29 @@ class _GoogleButtonState extends State<_GoogleButton> {
         ),
       ),
     );
+  }
+}
+
+class _SafeGoogleWebSignInButton extends StatelessWidget {
+  final String label;
+
+  const _SafeGoogleWebSignInButton({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      return buildGoogleWebSignInButton(label: label);
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'picklink auth',
+          context: ErrorDescription('building the Google web sign-in button'),
+        ),
+      );
+      return const SizedBox.shrink();
+    }
   }
 }
 
