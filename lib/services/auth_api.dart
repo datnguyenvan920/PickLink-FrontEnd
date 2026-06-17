@@ -1,11 +1,10 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
 
 /// Mirrors the backend ExperienceLevel enum.
 
 import 'package:http/http.dart' as http;
 import 'avatar_picker.dart';
+import 'platform_info.dart';
 
 // ─── Experience Level ─────────────────────────────────────────────────────────
 
@@ -27,7 +26,7 @@ const _kEnvApiUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
 
 String get _apiBaseUrl {
   if (_kEnvApiUrl.isNotEmpty) return _kEnvApiUrl;
-  if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:5209';
+  if (isAndroidPlatform) return 'http://10.0.2.2:5209';
   return 'http://localhost:5209';
 }
 
