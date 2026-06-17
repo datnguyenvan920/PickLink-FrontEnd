@@ -4,6 +4,7 @@ import 'map_screen.dart';
 import '../services/auth_api.dart';
 import '../services/match_api.dart';
 import 'match_voting_screen.dart';
+import 'match_detail_screen.dart';
 
 // ─── Enums & Models ──────────────────────────────────────────────────────────
 
@@ -128,12 +129,20 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Venue IDs returned by MapScreen — sent to matchmaking as PrefferedVenue.
   List<int> _selectedVenueIds = [];
 
+  /// Recent matches for the current player.
+  List<MyMatchDto> _myMatches = [];
+  bool _loadingMatches = false;
+
+  /// True when the player has an active (Voting/Scheduled) match.
+  bool get _hasActiveMatch => _myMatches.any((m) => m.isActive);
+
 
   @override
   void initState() {
     super.initState();
     _players = _makeInitialPlayers(_lobbySize);
     _fetchMe();
+    _fetchMyMatches();
   }
 
   /// Fetches the real user's lobby card and populates slot 0.
@@ -160,6 +169,23 @@ class _HomeScreenState extends State<HomeScreen> {
       // Silently ignore — slot 0 stays empty if the call fails
     } finally {
       if (mounted) setState(() => _loadingMe = false);
+    }
+  }
+
+  /// Fetches the player's recent matches from the backend.
+  Future<void> _fetchMyMatches() async {
+    final token = widget.authSession?.token;
+    if (token == null) return;
+
+    setState(() => _loadingMatches = true);
+    try {
+      final matches = await AuthApi().fetchMyMatches(token);
+      if (!mounted) return;
+      setState(() => _myMatches = matches);
+    } catch (_) {
+      // Silently ignore
+    } finally {
+      if (mounted) setState(() => _loadingMatches = false);
     }
   }
 
@@ -277,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Build the players array — one entry for the current user
       final myPlayer = LobbyPlayerDto(
-        playerId:   me.userId,
+        playerId:   me.playerId ?? me.userId,
         playerName: me.username,
         playerSkill: me.skillLevel,
         playerProfilePictureUrl: me.profileImageUrl,
@@ -424,12 +450,23 @@ class _HomeScreenState extends State<HomeScreen> {
             lobbySize: _lobbySize,
             availableHours: _availableHours,
             startHour: _startHour,
+            hasActiveMatch: _hasActiveMatch,
             onFindMatch: _findMatch,
             onLeave: _leaveSearch,
             onLobbySizeChanged: _changeLobbySize,
             onAvailableHoursChanged: (h) => setState(() => _availableHours = h),
             onStartHourChanged: (h) => setState(() => _startHour = h),
           ),
+          // ── Match History Panel ─────────────────────────────────────
+          if (_myMatches.isNotEmpty || _loadingMatches)
+            _MatchHistoryPanel(
+              dark: dark,
+              matches: _myMatches,
+              loading: _loadingMatches,
+              authSession: widget.authSession,
+              isDarkMode: widget.isDarkMode,
+              onRefresh: _fetchMyMatches,
+            ),
           _Divider(dark: dark),
           _AdsFeed(dark: dark),
         ],
@@ -599,6 +636,7 @@ class _LobbySection extends StatelessWidget {
   final int lobbySize;
   final double availableHours;
   final double startHour;
+  final bool hasActiveMatch;
   final VoidCallback onFindMatch;
   final VoidCallback onLeave;
   final ValueChanged<int> onLobbySizeChanged;
@@ -614,6 +652,7 @@ class _LobbySection extends StatelessWidget {
     required this.lobbySize,
     required this.availableHours,
     required this.startHour,
+    required this.hasActiveMatch,
     required this.onFindMatch,
     required this.onLeave,
     required this.onLobbySizeChanged,
@@ -763,22 +802,30 @@ class _LobbySection extends StatelessWidget {
                       child: const Text('Hủy tìm', style: TextStyle(fontWeight: FontWeight.bold)),
                     )
                   : ElevatedButton(
-                      onPressed: filled == lobbySize ? null : onFindMatch,
+                      onPressed: (filled == lobbySize || hasActiveMatch) ? null : onFindMatch,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: filled == lobbySize ? const Color(0xFFD1D5DB) : const Color(0xFF22C55E),
+                        backgroundColor: (filled == lobbySize || hasActiveMatch) ? const Color(0xFFD1D5DB) : const Color(0xFF22C55E),
                         disabledBackgroundColor: const Color(0xFFD1D5DB),
-                        foregroundColor: filled == lobbySize ? const Color(0xFF9CA3AF) : Colors.white,
+                        foregroundColor: (filled == lobbySize || hasActiveMatch) ? const Color(0xFF9CA3AF) : Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        elevation: filled == lobbySize ? 0 : 4,
+                        elevation: (filled == lobbySize || hasActiveMatch) ? 0 : 4,
                         shadowColor: const Color(0x6622C55E),
                       ),
-                      child: Text(filled == lobbySize ? '🎉 Đủ người!' : '🔍 Tìm người chơi', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(
+                        hasActiveMatch
+                            ? '⚠️ Đang có trận'
+                            : filled == lobbySize
+                                ? '🎉 Đủ người!'
+                                : '🔍 Tìm người chơi',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
             ),
             const SizedBox(width: 10),
+            // TODO: implement invite-friends flow
             OutlinedButton(
-              onPressed: () {},
+              onPressed: null, // not yet implemented
               style: OutlinedButton.styleFrom(
                 side: BorderSide(color: dark ? const Color(0xFF4B5563) : const Color(0xFFE5E7EB), width: 2),
                 foregroundColor: dark ? const Color(0xFFD1D5DB) : const Color(0xFF374151),
@@ -1059,6 +1106,279 @@ class _CourtCard extends StatelessWidget {
           Text('50K', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: dark ? const Color(0xFF4ADE80) : const Color(0xFF16A34A))),
         ]),
       ]),
+    );
+  }
+}
+
+// ─── Match History Panel ──────────────────────────────────────────────────────
+
+class _MatchHistoryPanel extends StatelessWidget {
+  final bool dark;
+  final List<MyMatchDto> matches;
+  final bool loading;
+  final AuthSession? authSession;
+  final bool isDarkMode;
+  final VoidCallback onRefresh;
+
+  const _MatchHistoryPanel({
+    required this.dark,
+    required this.matches,
+    required this.loading,
+    required this.authSession,
+    required this.isDarkMode,
+    required this.onRefresh,
+  });
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'voting':    return const Color(0xFFF59E0B);
+      case 'scheduled': return const Color(0xFF22C55E);
+      case 'completed': return const Color(0xFF6B7280);
+      case 'cancelled': return const Color(0xFFEF4444);
+      default:          return const Color(0xFF9CA3AF);
+    }
+  }
+
+  IconData _statusIcon(String status) {
+    switch (status.toLowerCase()) {
+      case 'voting':    return Icons.how_to_vote_outlined;
+      case 'scheduled': return Icons.event_available_outlined;
+      case 'completed': return Icons.check_circle_outline;
+      case 'cancelled': return Icons.cancel_outlined;
+      default:          return Icons.help_outline;
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status.toLowerCase()) {
+      case 'voting':    return 'Đang bầu chọn';
+      case 'scheduled': return 'Đã xếp lịch';
+      case 'completed': return 'Hoàn thành';
+      case 'cancelled': return 'Đã huỷ';
+      case 'pending':   return 'Chờ xử lý';
+      default:          return status;
+    }
+  }
+
+  String _formatTime(DateTime? dt) {
+    if (dt == null) return '—';
+    final local = dt.toLocal();
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$day/$month $hour:$minute';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header row ──
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(children: [
+                Icon(Icons.history, size: 16, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                const SizedBox(width: 6),
+                Text(
+                  'Trận đấu của bạn',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: dark ? Colors.white : const Color(0xFF111827),
+                  ),
+                ),
+              ]),
+              if (loading)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Color(0xFF22C55E))),
+                )
+              else
+                GestureDetector(
+                  onTap: onRefresh,
+                  child: Icon(Icons.refresh, size: 18, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // ── Match cards ──
+          ...matches.map((m) => _MatchCard(
+            match: m,
+            dark: dark,
+            statusColor: _statusColor(m.status),
+            statusIcon: _statusIcon(m.status),
+            statusLabel: _statusLabel(m.status),
+            timeLabel: m.matchTime != null
+                ? _formatTime(m.matchTime)
+                : (m.preferredTimeStart != null && m.preferredTimeEnd != null)
+                    ? '${m.preferredTimeStart} – ${m.preferredTimeEnd}'
+                    : '—',
+            onTap: m.isActive ? () => _navigateToMatch(context, m) : null,
+          )),
+        ],
+      ),
+    );
+  }
+
+  void _navigateToMatch(BuildContext context, MyMatchDto match) {
+    if (authSession == null) return;
+
+    Widget destination;
+    if (match.status.toLowerCase() == 'scheduled') {
+      destination = MatchDetailScreen(
+        matchId: match.matchId,
+        authSession: authSession!,
+        isDarkMode: isDarkMode,
+      );
+    } else {
+      destination = MatchVotingScreen(
+        matchId: match.matchId,
+        authSession: authSession!,
+        isDarkMode: isDarkMode,
+      );
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => destination),
+    ).then((_) => onRefresh());
+  }
+}
+
+class _MatchCard extends StatelessWidget {
+  final MyMatchDto match;
+  final bool dark;
+  final Color statusColor;
+  final IconData statusIcon;
+  final String statusLabel;
+  final String timeLabel;
+  final VoidCallback? onTap;
+
+  const _MatchCard({
+    required this.match,
+    required this.dark,
+    required this.statusColor,
+    required this.statusIcon,
+    required this.statusLabel,
+    required this.timeLabel,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = dark ? const Color(0xFF1F2937) : Colors.white;
+    final border = dark ? const Color(0xFF374151) : const Color(0xFFE5E7EB);
+    final isActive = match.isActive;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isActive ? statusColor.withValues(alpha: 0.5) : border,
+            width: isActive ? 1.5 : 1,
+          ),
+          boxShadow: isActive
+              ? [BoxShadow(color: statusColor.withValues(alpha: 0.08), blurRadius: 8, offset: const Offset(0, 2))]
+              : null,
+        ),
+        child: Row(
+          children: [
+            // Status icon circle
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: statusColor.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(statusIcon, size: 18, color: statusColor),
+            ),
+            const SizedBox(width: 12),
+
+            // Match info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    // Status badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        statusLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: statusColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${match.playerCount} người chơi',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                  Row(children: [
+                    Icon(Icons.access_time, size: 11, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                    const SizedBox(width: 4),
+                    Text(
+                      timeLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: dark ? const Color(0xFFD1D5DB) : const Color(0xFF374151),
+                      ),
+                    ),
+                    if (match.venueName != null) ...[
+                      const SizedBox(width: 8),
+                      Icon(Icons.location_on_outlined, size: 11, color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                      const SizedBox(width: 2),
+                      Flexible(
+                        child: Text(
+                          match.venueName!,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ]),
+                ],
+              ),
+            ),
+
+            // Chevron for active matches
+            if (isActive)
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: dark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

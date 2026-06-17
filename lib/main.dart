@@ -60,7 +60,6 @@ class _PickleMatchAppState extends State<PickleMatchApp> {
   }
 
   void _onSetupComplete(ProfileSetupResult result) {
-    // TODO: send result (role, skillLevel, affiliationCode) to backend
     setState(() {
       _authed = true;
       _needsSetup = false;

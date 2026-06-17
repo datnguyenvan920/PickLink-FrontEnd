@@ -252,6 +252,59 @@ class AuthApi {
     }
   }
 
+  /// Fetches the current player's recent matches from GET /api/match/my-matches.
+  Future<List<MyMatchDto>> fetchMyMatches(String token) async {
+    final response = await _client.get(
+      _uri('/api/match/my-matches'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final list = jsonDecode(response.body) as List<dynamic>;
+      return list
+          .map((e) => MyMatchDto.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return [];  // silently return empty on error
+  }
+
+  /// Fetches match detail (teams, venue, chat ID) from GET /api/match/{matchId}/detail.
+  Future<MatchDetailDto> fetchMatchDetail(String token, int matchId) async {
+    final response = await _client.get(
+      _uri('/api/match/$matchId/detail'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return MatchDetailDto.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    throw ApiException('Failed to fetch match detail (${response.statusCode})', statusCode: response.statusCode);
+  }
+
+  /// Fetches lobby chat messages from GET /api/match/{matchId}/messages.
+  Future<List<MatchMessageDto>> fetchMatchMessages(String token, int matchId) async {
+    final response = await _client.get(
+      _uri('/api/match/$matchId/messages'),
+      headers: _jsonHeaders(token: token),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final list = jsonDecode(response.body) as List<dynamic>;
+      return list.map((e) => MatchMessageDto.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    return [];
+  }
+
+  /// Sends a message to the lobby chat via POST /api/match/{matchId}/messages.
+  Future<MatchMessageDto?> sendMatchMessage(String token, int matchId, String content) async {
+    final response = await _client.post(
+      _uri('/api/match/$matchId/messages'),
+      headers: _jsonHeaders(token: token),
+      body: jsonEncode({'content': content}),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return MatchMessageDto.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    return null;
+  }
+
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
   Future<http.Response> _postJson(
@@ -445,6 +498,7 @@ class RoleStatus {
 
 class LobbyMeData {
   final int userId;
+  final int? playerId;
   final String username;
   final String avatarInitials;
   final double skillLevel;
@@ -454,6 +508,7 @@ class LobbyMeData {
 
   const LobbyMeData({
     required this.userId,
+    this.playerId,
     required this.username,
     required this.avatarInitials,
     required this.skillLevel,
@@ -465,6 +520,7 @@ class LobbyMeData {
   factory LobbyMeData.fromJson(Map<String, dynamic> json) {
     return LobbyMeData(
       userId:         json['userId']         as int,
+      playerId:       json['playerId']       as int?,
       username:       json['username']       as String,
       avatarInitials: json['avatarInitials'] as String,
       skillLevel:     (json['skillLevel'] as num).toDouble(),
@@ -712,6 +768,162 @@ class ProfileMatch {
       courtNumber: _asInt(json['courtNumber']),
       scoreInfo: json['scoreInfo'] as String?,
       checkInStatus: json['checkInStatus'] as String?,
+    );
+  }
+}
+
+// ─── My Match ─────────────────────────────────────────────────────────────────
+
+/// Lightweight match entry returned by GET /api/match/my-matches.
+class MyMatchDto {
+  final int matchId;
+  final String matchType;
+  final String status;
+  final DateTime? matchTime;
+  final int matchSkillLevel;
+  final String? preferredTimeStart;
+  final String? preferredTimeEnd;
+  final String? venueName;
+  final int playerCount;
+
+  const MyMatchDto({
+    required this.matchId,
+    required this.matchType,
+    required this.status,
+    this.matchTime,
+    required this.matchSkillLevel,
+    this.preferredTimeStart,
+    this.preferredTimeEnd,
+    this.venueName,
+    required this.playerCount,
+  });
+
+  /// True when this match is still active (Voting or Scheduled).
+  bool get isActive =>
+      status.toLowerCase() == 'voting' ||
+      status.toLowerCase() == 'scheduled';
+
+  factory MyMatchDto.fromJson(Map<String, dynamic> json) {
+    return MyMatchDto(
+      matchId: json['matchId'] as int,
+      matchType: json['matchType'] as String? ?? 'normal',
+      status: json['status'] as String? ?? 'Unknown',
+      matchTime: DateTime.tryParse(json['matchTime'] as String? ?? ''),
+      matchSkillLevel: _asInt(json['matchSkillLevel']) ?? 0,
+      preferredTimeStart: json['preferredTimeStart'] as String?,
+      preferredTimeEnd: json['preferredTimeEnd'] as String?,
+      venueName: json['venueName'] as String?,
+      playerCount: _asInt(json['playerCount']) ?? 0,
+    );
+  }
+}
+
+// ─── Match Detail ───────────────────────────────────────────────────────────────
+
+class MatchDetailDto {
+  final int matchId;
+  final String matchType;
+  final String status;
+  final DateTime? matchTime;
+  final String? venueName;
+  final int? courtNumber;
+  final int? conversationId;
+  final TeamDetailDto? team1;
+  final TeamDetailDto? team2;
+
+  const MatchDetailDto({
+    required this.matchId,
+    required this.matchType,
+    required this.status,
+    this.matchTime,
+    this.venueName,
+    this.courtNumber,
+    this.conversationId,
+    this.team1,
+    this.team2,
+  });
+
+  factory MatchDetailDto.fromJson(Map<String, dynamic> json) {
+    return MatchDetailDto(
+      matchId: json['matchId'] as int,
+      matchType: json['matchType'] as String? ?? 'normal',
+      status: json['status'] as String? ?? '',
+      matchTime: DateTime.tryParse(json['matchTime'] as String? ?? ''),
+      venueName: json['venueName'] as String?,
+      courtNumber: _asInt(json['courtNumber']),
+      conversationId: _asInt(json['conversationId']),
+      team1: json['team1'] != null ? TeamDetailDto.fromJson(json['team1'] as Map<String, dynamic>) : null,
+      team2: json['team2'] != null ? TeamDetailDto.fromJson(json['team2'] as Map<String, dynamic>) : null,
+    );
+  }
+}
+
+class TeamDetailDto {
+  final int teamId;
+  final String teamName;
+  final List<TeamPlayerDto> players;
+
+  const TeamDetailDto({required this.teamId, required this.teamName, required this.players});
+
+  factory TeamDetailDto.fromJson(Map<String, dynamic> json) {
+    return TeamDetailDto(
+      teamId: json['teamId'] as int,
+      teamName: json['teamName'] as String? ?? '',
+      players: (json['players'] as List<dynamic>? ?? []).map((e) => TeamPlayerDto.fromJson(e as Map<String, dynamic>)).toList(),
+    );
+  }
+}
+
+class TeamPlayerDto {
+  final int playerId;
+  final String playerName;
+  final String? avatarUrl;
+
+  const TeamPlayerDto({required this.playerId, required this.playerName, this.avatarUrl});
+
+  factory TeamPlayerDto.fromJson(Map<String, dynamic> json) {
+    return TeamPlayerDto(
+      playerId: json['playerId'] as int,
+      playerName: json['playerName'] as String? ?? '',
+      avatarUrl: json['avatarUrl'] as String?,
+    );
+  }
+}
+
+class MatchMessageDto {
+  final int messageId;
+  final int conversationId;
+  final int senderId;
+  final String senderName;
+  final String? senderAvatarUrl;
+  final String? content;
+  final String messageType;
+  final DateTime sentAt;
+  final bool isMine;
+
+  const MatchMessageDto({
+    required this.messageId,
+    required this.conversationId,
+    required this.senderId,
+    required this.senderName,
+    this.senderAvatarUrl,
+    this.content,
+    required this.messageType,
+    required this.sentAt,
+    required this.isMine,
+  });
+
+  factory MatchMessageDto.fromJson(Map<String, dynamic> json) {
+    return MatchMessageDto(
+      messageId: json['messageId'] as int,
+      conversationId: _asInt(json['conversationId']) ?? 0,
+      senderId: json['senderId'] as int,
+      senderName: json['senderName'] as String? ?? '',
+      senderAvatarUrl: json['senderAvatarUrl'] as String?,
+      content: json['content'] as String?,
+      messageType: json['messageType'] as String? ?? 'Text',
+      sentAt: DateTime.tryParse(json['sentAt'] as String? ?? '') ?? DateTime.now(),
+      isMine: json['isMine'] as bool? ?? false,
     );
   }
 }
