@@ -12,7 +12,7 @@ void main() {
   testWidgets('shows auth screen on launch', (WidgetTester tester) async {
     await tester.pumpWidget(const PickleMatchApp());
 
-    expect(find.text('PickleMatch'), findsOneWidget);
+    expect(find.text('Picklink'), findsOneWidget);
     expect(find.text('Welcome back!'), findsOneWidget);
     expect(find.text('Sign In'), findsOneWidget);
     expect(find.text('Skip for now'), findsOneWidget);
